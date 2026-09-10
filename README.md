@@ -27,9 +27,15 @@ The CNIPS CLI enables local development, testing, and deployment of integration 
 
 ## Installation
 
-### From Source
+### Using `go install`
 
 Requires [Go 1.25+](https://go.dev/dl/).
+
+```bash
+go install github.com/cnips/cli/cmd/cnips@latest
+```
+
+### From Source
 
 ```bash
 # Clone the repository
