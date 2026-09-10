@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -122,6 +123,304 @@ func TestRunLoginAllowsNginxResolvedTenantWithoutTenantKey(t *testing.T) {
 	}
 	if profile.TenantKey != "" {
 		t.Fatalf("profile tenant = %q, want empty", profile.TenantKey)
+	}
+}
+
+func TestRunLoginWithoutExistingConfigPromptsForWorkspace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/workspace" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"status":  200,
+			"data": []map[string]string{
+				{"workspaceId": "ws-1", "workspaceName": "Workspace One"},
+				{"workspaceId": "ws-2", "workspaceName": "Workspace Two"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+
+	oldStdin := os.Stdin
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = write.WriteString("2\n")
+	_ = write.Close()
+	os.Stdin = read
+	defer func() {
+		os.Stdin = oldStdin
+		_ = read.Close()
+	}()
+
+	cmd := newLoginTestCommand()
+	_ = cmd.Flags().Set("api-url", server.URL)
+	_ = cmd.Flags().Set("tenant-key", "cnips-local")
+	_ = cmd.Flags().Set("token", "Bearer test-token")
+	if err := runLogin(cmd, nil); err != nil {
+		t.Fatalf("login execute: %v", err)
+	}
+
+	cfg, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := cfg.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.WorkspaceID != "ws-2" {
+		t.Fatalf("workspace = %q, want ws-2", profile.WorkspaceID)
+	}
+}
+
+func TestRunLoginReusesExistingWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "cnips.yaml", "apiVersion: cnips.io/v1\nkind: Project\nmetadata:\n  name: test\n")
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/workspace" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"status":  200,
+			"data": []map[string]string{
+				{"workspaceId": "ws-1", "workspaceName": "Workspace One"},
+				{"workspaceId": "ws-2", "workspaceName": "Workspace Two"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	cfg := &auth.Config{}
+	cfg.Upsert(auth.Profile{
+		Name:        "default",
+		APIURL:      server.URL,
+		TenantKey:   "cnips-local",
+		WorkspaceID: "ws-2",
+		Workspaces:  []auth.Workspace{{ID: "ws-1"}, {ID: "ws-2"}},
+	})
+	cfg.ClearToken("default")
+	if err := auth.Save(cfg); err != nil {
+		t.Fatalf("auth.Save: %v", err)
+	}
+
+	cmd := newLoginTestCommand()
+	_ = cmd.Flags().Set("api-url", server.URL)
+	_ = cmd.Flags().Set("tenant-key", "cnips-local")
+	_ = cmd.Flags().Set("token", "Bearer new-token")
+	if err := runLogin(cmd, nil); err != nil {
+		t.Fatalf("login execute: %v", err)
+	}
+
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := loaded.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.WorkspaceID != "ws-2" {
+		t.Fatalf("workspace = %q, want ws-2", profile.WorkspaceID)
+	}
+	if profile.Token != "new-token" {
+		t.Fatalf("token = %q, want new-token", profile.Token)
+	}
+}
+
+func TestRunLoginWithExistingLoggedInConfigPromptsForWorkspace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/workspace" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"status":  200,
+			"data": []map[string]string{
+				{"workspaceId": "ws-1", "workspaceName": "Workspace One"},
+				{"workspaceId": "ws-2", "workspaceName": "Workspace Two"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	cfg := &auth.Config{}
+	cfg.Upsert(auth.Profile{
+		Name:        "default",
+		APIURL:      server.URL,
+		TenantKey:   "cnips-local",
+		Token:       "old-token",
+		WorkspaceID: "ws-1",
+		Workspaces:  []auth.Workspace{{ID: "ws-1"}, {ID: "ws-2"}},
+	})
+	if err := auth.Save(cfg); err != nil {
+		t.Fatalf("auth.Save: %v", err)
+	}
+
+	oldStdin := os.Stdin
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = write.WriteString("2\n")
+	_ = write.Close()
+	os.Stdin = read
+	defer func() {
+		os.Stdin = oldStdin
+		_ = read.Close()
+	}()
+
+	cmd := newLoginTestCommand()
+	_ = cmd.Flags().Set("api-url", server.URL)
+	_ = cmd.Flags().Set("tenant-key", "cnips-local")
+	_ = cmd.Flags().Set("token", "Bearer new-token")
+	if err := runLogin(cmd, nil); err != nil {
+		t.Fatalf("login execute: %v", err)
+	}
+
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := loaded.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.WorkspaceID != "ws-2" {
+		t.Fatalf("workspace = %q, want ws-2", profile.WorkspaceID)
+	}
+}
+
+func TestRunSwitchDiscardsAndUpdatesWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "cnips.yaml", "apiVersion: cnips.io/v1\nkind: Project\nmetadata:\n  name: test\n")
+	writeTestFile(t, root, "cnips.lock", "apiVersion: cnips.io/v1\nkind: Lock\nspec: {}\n")
+	writeTestFile(t, root, "pipelines/orders/pipeline.yaml", "kind: Pipeline\n")
+	writeTestFile(t, root, ".cnips/state/workspaces/ws-1/base-manifest.json", "{}\n")
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	cfg := &auth.Config{}
+	cfg.Upsert(auth.Profile{
+		Name:        "default",
+		APIURL:      "http://localhost:8090",
+		TenantKey:   "cnips-local",
+		Token:       "token",
+		WorkspaceID: "ws-1",
+		Workspaces:  []auth.Workspace{{ID: "ws-1"}, {ID: "ws-2"}},
+	})
+	if err := auth.Save(cfg); err != nil {
+		t.Fatalf("auth.Save: %v", err)
+	}
+
+	oldStdin := os.Stdin
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = write.WriteString("yes\n")
+	_ = write.Close()
+	os.Stdin = read
+	defer func() {
+		os.Stdin = oldStdin
+		_ = read.Close()
+	}()
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("profile", "", "")
+	if err := runSwitch(cmd, nil); err != nil {
+		t.Fatalf("runSwitch: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "pipelines", "orders", "pipeline.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("pipeline should be discarded, stat err=%v", err)
+	}
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := loaded.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.WorkspaceID != "ws-2" {
+		t.Fatalf("workspace = %q, want ws-2", profile.WorkspaceID)
+	}
+	if profile.Token != "token" {
+		t.Fatalf("token should be preserved on switch, got %q", profile.Token)
+	}
+}
+
+func TestRunLogoutClearsOnlyTokenFields(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	cfg := &auth.Config{}
+	cfg.Upsert(auth.Profile{
+		Name:         "default",
+		BaseURL:      "https://local.cnips.eu",
+		APIURL:       "https://local.cnips.eu/mgmt-srv",
+		TenantKey:    "cnips-local",
+		Token:        "token",
+		RefreshToken: "refresh",
+		TokenType:    "Bearer",
+		WorkspaceID:  "ws-1",
+		Workspaces:   []auth.Workspace{{ID: "ws-1"}, {ID: "ws-2"}},
+	})
+	if err := auth.Save(cfg); err != nil {
+		t.Fatalf("auth.Save: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("env", "default", "")
+	if err := runLogout(cmd, nil); err != nil {
+		t.Fatalf("runLogout: %v", err)
+	}
+
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := loaded.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.Token != "" || profile.RefreshToken != "" || profile.TokenType != "" {
+		t.Fatalf("token fields should be cleared: %#v", profile)
+	}
+	if profile.APIURL != "https://local.cnips.eu/mgmt-srv" || profile.TenantKey != "cnips-local" || profile.WorkspaceID != "ws-1" || len(profile.Workspaces) != 2 {
+		t.Fatalf("profile config should be preserved: %#v", profile)
 	}
 }
 

@@ -49,7 +49,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if kind == "" {
 		return fmt.Errorf("unsupported publish type %q; use transformation, destination, switch, approval, or decision", args[0])
 	}
-	apiURL, workspace, tenantKey, token := platformFlags(cmd)
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
 	marketplaceURL, err := resolveMarketplaceURL(cmd, apiURL)
 	if err != nil {
 		return err

@@ -16,6 +16,11 @@
 
 The CNIPS CLI enables local development, testing, and deployment of integration pipelines, components, and functions. Build and run pipelines locally with hot-reload, sync changes with remote workspaces, and publish components to the marketplace — all from your terminal.
 
+Most commands require an active saved token. Run `cnips login` first; after
+`cnips logout`, commands that operate on a project or workspace will ask you to
+log in again. `cnips init`, `cnips login`, `cnips logout`, `cnips discard`, and
+help commands remain available without a token.
+
 ## Features
 
 - **Local Pipeline Execution** — Run pipelines locally with native components (JSONata transformations, decisions, switches, loops, approvals)
@@ -154,6 +159,8 @@ cnips push
 | Command | Description |
 |---------|-------------|
 | `cnips login` | Authenticate with mgmt-srv (browser OIDC or token) |
+| `cnips logout` | Remove only the saved token from the current profile |
+| `cnips switch` | Switch workspace after confirming local artifacts can be discarded |
 
 ### Workspace Sync
 
@@ -161,6 +168,7 @@ cnips push
 |---------|-------------|
 | `cnips pull` | Pull workspace artifacts to local files |
 | `cnips push` | Apply local files to a workspace |
+| `cnips discard` | Reset local cnips artifacts/state and remove saved CLI config |
 | `cnips diff` | Show differences between local and remote |
 | `cnips status` | Show local and remote changes against base |
 | `cnips stash [push\|list\|apply\|pop]` | Temporarily save local changes |
@@ -209,6 +217,11 @@ cnips add <component-name> --type <type> --language <lang> [--go-framework <fram
 cnips login [--base-url <url>] [--token <token>] [--workspace <id>]
 ```
 
+On first login, when no workspace is saved in the local config, the CLI asks
+which accessible workspace to use. After `cnips logout`, the next login keeps
+the existing workspace selection and refreshes only the token. To change the
+workspace, use `cnips switch`.
+
 **Flags:**
 - `--base-url` — CNIPS origin URL for browser login
 - `--api-url` — Direct mgmt-srv URL (default: `http://localhost:8090`)
@@ -218,6 +231,39 @@ cnips login [--base-url <url>] [--token <token>] [--workspace <id>]
 - `--profile` — Local auth profile name (default: `default`)
 - `--force` — Force fresh login, ignoring cached tokens
 - `--skip-verify` — Save credentials without verifying against mgmt-srv
+
+### `cnips logout`
+
+```bash
+cnips logout [--profile <name>]
+```
+
+Clears token fields from the selected auth profile while keeping the base URL,
+tenant, workspace list, and selected workspace. Commands that contact cnips
+and project commands require `cnips login` again before they can use the saved
+profile.
+
+### `cnips switch`
+
+```bash
+cnips switch [--profile <name>]
+```
+
+Switches the selected workspace for the current profile. The command warns that
+local cnips artifacts will be discarded, asks for confirmation, shows only
+workspaces other than the current one, resets the project to a clean init-style
+layout, and updates the profile. It does not run `cnips pull` automatically.
+
+### `cnips discard`
+
+```bash
+cnips discard
+```
+
+Removes local cnips artifacts, `.cnips` sync/cache state, and the saved cnips
+CLI config, then recreates the empty init-style project folders and resets
+`cnips.lock`. It keeps `cnips.yaml`, `environments/`, `.git`, and unrelated
+repository files.
 
 ### `cnips pull`
 
@@ -350,15 +396,20 @@ spec:
 
 ### Auth Profiles
 
-Authentication profiles are stored at `~/.cnips/config.yaml`:
+Authentication profiles are stored in the local user config directory, usually
+`~/.config/cnips/config.json`:
 
-```yaml
-currentProfile: default
-profiles:
-  default:
-    apiURL: http://localhost:8090
-    workspaceID: default
-    tenantKey: my-tenant
+```json
+{
+  "currentProfile": "default",
+  "profiles": {
+    "default": {
+      "apiUrl": "http://localhost:8090",
+      "workspaceId": "default",
+      "tenantKey": "my-tenant"
+    }
+  }
+}
 ```
 
 ## Examples

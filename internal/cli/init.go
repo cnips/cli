@@ -52,27 +52,8 @@ Folder structure created:
 		}
 		existingManifest := fileExists(filepath.Join(targetDir, "cnips.yaml"))
 
-		dirs := []string{
-			"pipelines",
-			"components",
-			"functions",
-			"sources",
-			"destinations",
-			"transformations",
-			"approvals",
-			"switches",
-			"decisions",
-			"environments",
-			".cnips/cache/artifacts",
-			".cnips/cache/schemas",
-			".cnips/traces",
-			".cnips/state",
-		}
-
-		for _, d := range dirs {
-			if err := os.MkdirAll(filepath.Join(targetDir, d), 0o755); err != nil {
-				return err
-			}
+		if err := ensureInitProjectDirs(targetDir); err != nil {
+			return err
 		}
 
 		// cnips.yaml
