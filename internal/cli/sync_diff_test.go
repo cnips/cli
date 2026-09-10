@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cnips/cli/internal/platform"
 )
 
 func TestSameManifestFileUsesFileDigestBeforeCodeHash(t *testing.T) {
@@ -45,6 +47,24 @@ func TestClassifySyncStatus(t *testing.T) {
 				t.Fatalf("classifySyncStatus() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPlatformTransformationTypePreservesFamilies(t *testing.T) {
+	cases := map[string]string{
+		"APPROVAL":       "APPROVAL",
+		"approval":       "APPROVAL",
+		"SWITCH":         "SWITCH",
+		"decision":       "DECISION",
+		"TRANSFORMATION": "TRANSFORMATION",
+		"LOOP":           "TRANSFORMATION",
+		"":               "TRANSFORMATION",
+	}
+	for input, want := range cases {
+		got := platformTransformationType(platform.Transformation{Type: input})
+		if got != want {
+			t.Fatalf("platformTransformationType(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

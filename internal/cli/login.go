@@ -5,10 +5,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/cnips/cli/internal/auth"
 	"github.com/cnips/cli/internal/platform"
@@ -83,6 +86,9 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	if apiURL == "" {
 		apiURL = prompt(reader, "mgmt-srv URL", auth.APIURLFromOrigin(baseURL))
+	}
+	if token == "" && baseURL == "" && !cmd.Flags().Changed("api-url") {
+		return fmt.Errorf("either --base-url (for browser login) or --token (for token login) is required\n\nExamples:\n  cnips login --base-url https://your-cnips-instance.com\n  cnips login --token \"$CNIPS_TOKEN\"")
 	}
 	var tokenMeta *auth.Token
 	if token == "" {
@@ -203,6 +209,15 @@ func convertWorkspaces(workspaces []platform.Workspace) []auth.Workspace {
 		}
 		out = append(out, auth.Workspace{ID: id, Name: name})
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ID == "default" {
+			return true
+		}
+		if out[j].ID == "default" {
+			return false
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -210,22 +225,148 @@ func chooseWorkspace(reader *bufio.Reader, workspaces []auth.Workspace) string {
 	if len(workspaces) == 1 {
 		return workspaces[0].ID
 	}
-	fmt.Println("Available workspaces:")
+	options := make([]string, len(workspaces))
 	for i, ws := range workspaces {
-		label := ws.ID
 		if ws.Name != "" && ws.Name != ws.ID {
-			label += " (" + ws.Name + ")"
+			options[i] = ws.ID + " (" + ws.Name + ")"
+		} else {
+			options[i] = ws.ID
 		}
-		fmt.Printf("  %d. %s\n", i+1, label)
 	}
-	selected := prompt(reader, "Workspace", workspaces[0].ID)
+	idx := interactiveSelect("Select workspace", options)
+	if idx >= 0 && idx < len(workspaces) {
+		return workspaces[idx].ID
+	}
+	return workspaces[0].ID
+}
+
+// interactiveSelect presents an arrow-key navigable menu in the terminal.
+// Falls back to a numbered prompt when the terminal does not support raw mode.
+func interactiveSelect(title string, options []string) int {
+	if len(options) == 0 {
+		return -1
+	}
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return fallbackSelect(title, options)
+	}
+	defer term.Restore(fd, oldState)
+
+	width, _, _ := term.GetSize(fd)
+	if width <= 0 {
+		width = 80
+	}
+	numDigits := len(strconv.Itoa(len(options)))
+	prefixLen := 6 + numDigits
+	maxOptLen := width - prefixLen
+	display := make([]string, len(options))
+	for i, opt := range options {
+		if maxOptLen > 3 && len(opt) > maxOptLen {
+			display[i] = opt[:maxOptLen-3] + "..."
+		} else {
+			display[i] = opt
+		}
+	}
+
+	selected := 0
+	numOpts := len(display)
+	write := func(s string) { os.Stdout.WriteString(s) }
+
+	renderOption := func(i int, highlighted bool) {
+		write("\r\033[K")
+		if highlighted {
+			write(fmt.Sprintf("  \033[1;32m❯ %d. %s\033[0m\r\n", i+1, display[i]))
+		} else {
+			write(fmt.Sprintf("    %d. %s\r\n", i+1, display[i]))
+		}
+	}
+
+	write("\r\n")
+	write(fmt.Sprintf("  \033[1;36m%s\033[0m\r\n", title))
+	for i := range display {
+		renderOption(i, i == selected)
+	}
+	maxQuick := numOpts
+	if maxQuick > 9 {
+		maxQuick = 9
+	}
+	write(fmt.Sprintf("\r\n  \033[2m↑/↓ navigate • Enter select • 1-%d quick pick • Esc cancel\033[0m", maxQuick))
+	write(fmt.Sprintf("\033[%dA\r", numOpts+1))
+
+	renderAll := func() {
+		write("\r")
+		for i := range display {
+			renderOption(i, i == selected)
+		}
+		write(fmt.Sprintf("\033[%dA\r", numOpts))
+	}
+
+	cleanup := func() {
+		write(fmt.Sprintf("\033[%dB", numOpts))
+		write("\r\033[K\r\n\033[K\r\n")
+	}
+
+	buf := make([]byte, 3)
 	for {
-		if workspaceExists(workspaces, selected) {
-			return selected
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			cleanup()
+			return -1
 		}
-		fmt.Printf("Workspace %q is not available.\n", selected)
-		selected = prompt(reader, "Workspace", workspaces[0].ID)
+		if n == 3 && buf[0] == 27 && buf[1] == 91 {
+			switch buf[2] {
+			case 65: // Up
+				if selected > 0 {
+					selected--
+					renderAll()
+				}
+			case 66: // Down
+				if selected < numOpts-1 {
+					selected++
+					renderAll()
+				}
+			}
+			continue
+		}
+		if n >= 1 {
+			switch buf[0] {
+			case 13, 10: // Enter
+				cleanup()
+				return selected
+			case 27, 3: // Esc, Ctrl+C
+				cleanup()
+				return -1
+			default:
+				if buf[0] >= '1' && buf[0] <= '9' {
+					idx := int(buf[0]-'0') - 1
+					if idx < numOpts {
+						selected = idx
+						renderAll()
+						cleanup()
+						return idx
+					}
+				}
+			}
+		}
 	}
+}
+
+// fallbackSelect is used when the terminal doesn't support raw mode (pipes, CI).
+func fallbackSelect(title string, options []string) int {
+	fmt.Printf("\n  %s\n", title)
+	for i, opt := range options {
+		fmt.Printf("    %d. %s\n", i+1, opt)
+	}
+	fmt.Printf("\n  Choose [1-%d]: ", len(options))
+	reader := bufio.NewReader(os.Stdin)
+	text, _ := reader.ReadString('\n')
+	text = strings.TrimSpace(text)
+	n, err := strconv.Atoi(text)
+	if err != nil || n < 1 || n > len(options) {
+		return 0
+	}
+	return n - 1
 }
 
 func workspaceExists(workspaces []auth.Workspace, workspaceID string) bool {

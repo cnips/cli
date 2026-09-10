@@ -112,7 +112,7 @@ func writeRemoteSnapshot(client *platform.Client, workspace, root string) error 
 	globalByID := globalVariablesByID(gvList)
 	const snapshotVersionWorkers = 32
 	txVersions := fetchComponentVersions(client, "", snapshotVersionWorkers, txList, func(t platform.Transformation) (string, string, string) {
-		return t.WorkspaceID, t.ID, "TRANSFORMATION"
+		return t.WorkspaceID, t.ID, platformTransformationType(t)
 	})
 	srcVersions := fetchComponentVersions(client, "", snapshotVersionWorkers, srcList, func(s platform.Source) (string, string, string) {
 		if !s.IsExtractor() {

@@ -32,15 +32,17 @@ Folder structure created:
   .gitignore              Ignores .cnips/ runtime cache`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := "my-integrations"
-		if len(args) > 0 {
-			name = args[0]
-		}
-
-		// Determine target directory
+		var name string
 		targetDir := "."
 		if len(args) > 0 {
+			name = args[0]
 			targetDir = slugify(name)
+		} else {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			name = filepath.Base(cwd)
 		}
 
 		if targetDir != "." {
