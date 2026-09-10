@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/cnips/cli/internal/artifact"
-	"github.com/cnips/cli/internal/auth"
 	"github.com/cnips/cli/internal/platform"
 	"github.com/cnips/cli/internal/project"
 	"github.com/cnips/cli/internal/serializer"
@@ -47,31 +46,14 @@ func init() {
 func runPull(cmd *cobra.Command, _ []string) error {
 	root := project.MustFindRoot()
 
-	apiURL, _ := cmd.Flags().GetString("api-url")
-	workspace, _ := cmd.Flags().GetString("workspace")
-	tenantKey, _ := cmd.Flags().GetString("tenant-key")
-	token, _ := cmd.Flags().GetString("token")
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	allWorkspaces, _ := cmd.Flags().GetBool("all-workspaces")
 	skipVersions, _ := cmd.Flags().GetBool("skip-versions")
 	versionWorkers, _ := cmd.Flags().GetInt("version-workers")
-
-	if cfg, err := auth.Load(); err == nil {
-		if profile, ok := cfg.Current(); ok {
-			if !cmd.Flags().Changed("api-url") && profile.APIURL != "" {
-				apiURL = profile.APIURL
-			}
-			if !cmd.Flags().Changed("workspace") && profile.WorkspaceID != "" {
-				workspace = profile.WorkspaceID
-			}
-			if !cmd.Flags().Changed("tenant-key") && profile.TenantKey != "" {
-				tenantKey = profile.TenantKey
-			}
-			if !cmd.Flags().Changed("token") && profile.Token != "" {
-				token = profile.Token
-			}
-		}
-	}
 
 	apiURL = strings.TrimRight(apiURL, "/")
 	token = normalizeToken(token)

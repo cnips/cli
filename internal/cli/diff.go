@@ -35,7 +35,10 @@ func init() {
 
 func runDiff(cmd *cobra.Command, _ []string) error {
 	root := project.MustFindRoot()
-	apiURL, workspace, tenantKey, token := platformFlags(cmd)
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
 	format, _ := cmd.Flags().GetString("format")
 	exitCode, _ := cmd.Flags().GetBool("exit-code")
 	serveResolver, _ := cmd.Flags().GetBool("serve-resolver")

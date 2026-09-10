@@ -96,6 +96,17 @@ func Save(cfg *Config) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
+func Remove() error {
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func Path() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("CNIPS_CONFIG")); path != "" {
 		return path, nil
@@ -126,4 +137,48 @@ func (c *Config) Upsert(profile Profile) {
 	profile.UpdatedAt = time.Now()
 	c.Profiles[profile.Name] = profile
 	c.CurrentProfile = profile.Name
+}
+
+func (c *Config) ClearToken(profileName string) bool {
+	if c == nil || c.Profiles == nil {
+		return false
+	}
+	profileName = strings.TrimSpace(profileName)
+	if profileName == "" {
+		profileName = c.CurrentProfile
+	}
+	if profileName == "" {
+		return false
+	}
+	profile, ok := c.Profiles[profileName]
+	if !ok {
+		return false
+	}
+	profile.Token = ""
+	profile.RefreshToken = ""
+	profile.TokenType = ""
+	profile.ExpiresAt = time.Time{}
+	profile.UpdatedAt = time.Now()
+	c.Profiles[profileName] = profile
+	c.CurrentProfile = profileName
+	return true
+}
+
+func (c *Config) SetWorkspace(profileName, workspaceID string) bool {
+	if c == nil || c.Profiles == nil {
+		return false
+	}
+	profileName = strings.TrimSpace(profileName)
+	if profileName == "" {
+		profileName = c.CurrentProfile
+	}
+	profile, ok := c.Profiles[profileName]
+	if !ok {
+		return false
+	}
+	profile.WorkspaceID = strings.TrimSpace(workspaceID)
+	profile.UpdatedAt = time.Now()
+	c.Profiles[profileName] = profile
+	c.CurrentProfile = profileName
+	return true
 }

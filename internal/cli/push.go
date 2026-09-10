@@ -37,7 +37,10 @@ func init() {
 
 func runPush(cmd *cobra.Command, _ []string) error {
 	root := project.MustFindRoot()
-	apiURL, workspace, tenantKey, token := platformFlags(cmd)
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 	if err := refreshLockFromLocal(root); err != nil {
@@ -439,14 +442,16 @@ func indexRenameAliases(root string, s *workspaceState) error {
 	return nil
 }
 
-func platformFlags(cmd *cobra.Command) (apiURL, workspace, tenantKey, token string) {
+func resolveAuthenticatedPlatformFlags(cmd *cobra.Command) (apiURL, workspace, tenantKey, token string, err error) {
 	apiURL, _ = cmd.Flags().GetString("api-url")
 	workspace, _ = cmd.Flags().GetString("workspace")
 	tenantKey, _ = cmd.Flags().GetString("tenant-key")
 	token, _ = cmd.Flags().GetString("token")
 
+	hasLoggedOutProfile := false
 	if cfg, err := auth.Load(); err == nil {
 		if profile, ok := cfg.Current(); ok {
+			hasLoggedOutProfile = profile.Token == ""
 			if !cmd.Flags().Changed("api-url") && profile.APIURL != "" {
 				apiURL = profile.APIURL
 			}
@@ -460,11 +465,17 @@ func platformFlags(cmd *cobra.Command) (apiURL, workspace, tenantKey, token stri
 				token = profile.Token
 			}
 		}
+	} else {
+		return "", "", "", "", err
 	}
 	if tenantKey == "" {
 		tenantKey = tenantKeyFromToken(token)
 	}
-	return strings.TrimRight(apiURL, "/"), workspace, tenantKey, normalizeToken(token)
+	token = normalizeToken(token)
+	if hasLoggedOutProfile && !cmd.Flags().Changed("token") {
+		return "", "", "", "", fmt.Errorf("not logged in; run cnips login before using remote workspace commands")
+	}
+	return strings.TrimRight(apiURL, "/"), workspace, tenantKey, token, nil
 }
 
 func tenantKeyFromToken(token string) string {

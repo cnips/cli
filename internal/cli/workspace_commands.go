@@ -19,7 +19,10 @@ var statusCmd = &cobra.Command{
 	Short: "Show local and cnips changes against the tracked base",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		root := project.MustFindRoot()
-		apiURL, workspace, tenantKey, token := platformFlags(cmd)
+		apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+		if err != nil {
+			return err
+		}
 		client := platform.NewClient(apiURL, tenantKey, token)
 		manifest, hasLocalBase, err := readComparisonBase(root, client, workspace, true)
 		if err != nil {
@@ -129,7 +132,10 @@ type cnipsStash struct {
 }
 
 func stashPush(cmd *cobra.Command, root string) error {
-	apiURL, workspace, tenantKey, token := platformFlags(cmd)
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
 	client := platform.NewClient(apiURL, tenantKey, token)
 	manifest, _, err := readComparisonBase(root, client, workspace, true)
 	if err != nil {

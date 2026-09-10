@@ -15,6 +15,7 @@ import (
 
 	"github.com/cnips/cli/internal/auth"
 	"github.com/cnips/cli/internal/platform"
+	"github.com/cnips/cli/internal/project"
 )
 
 var loginCmd = &cobra.Command{
@@ -87,6 +88,19 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if apiURL == "" {
 		apiURL = prompt(reader, "mgmt-srv URL", auth.APIURLFromOrigin(baseURL))
 	}
+	cfg, err := auth.Load()
+	if err != nil {
+		return err
+	}
+	existingProfile, hasExistingProfile := cfg.Profiles[profileName]
+	reuseWorkspace := hasExistingProfile &&
+		existingProfile.WorkspaceID != "" &&
+		existingProfile.Token == "" &&
+		!cmd.Flags().Changed("workspace") &&
+		isInsideCnipsProject()
+	if reuseWorkspace {
+		workspaceID = existingProfile.WorkspaceID
+	}
 	if token == "" && baseURL == "" && !cmd.Flags().Changed("api-url") {
 		return fmt.Errorf("either --base-url (for browser login) or --token (for token login) is required\n\nExamples:\n  cnips login --base-url https://your-cnips-instance.com\n  cnips login --token \"$CNIPS_TOKEN\"")
 	}
@@ -136,12 +150,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("workspace %q is not in the authenticated workspace list", workspaceID)
 		}
 	} else if workspaceID == "" {
-		workspaceID = "default"
-	}
-
-	cfg, err := auth.Load()
-	if err != nil {
-		return err
+		workspaceID = firstNonEmpty(existingProfile.WorkspaceID, "default")
 	}
 	cfg.Upsert(auth.Profile{
 		Name:        profileName,
@@ -151,7 +160,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		Token:       token,
 		User:        user,
 		WorkspaceID: workspaceID,
-		Workspaces:  savedWorkspaces,
+		Workspaces:  mergeLoginWorkspaces(savedWorkspaces, existingProfile.Workspaces),
 	})
 	if tokenMeta != nil {
 		profile := cfg.Profiles[profileName]
@@ -177,8 +186,27 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if len(savedWorkspaces) > 0 {
 		fmt.Printf("  access:    %d workspace(s)\n", len(savedWorkspaces))
 	}
+	if reuseWorkspace {
+		fmt.Println("  note:      existing workspace was reused. To switch workspaces, run cnips switch.")
+	}
 	fmt.Printf("  config:    %s\n", path)
 	return nil
+}
+
+func mergeLoginWorkspaces(current, previous []auth.Workspace) []auth.Workspace {
+	if len(current) > 0 {
+		return current
+	}
+	return previous
+}
+
+func isInsideCnipsProject() bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	_, err = project.FindRoot(cwd)
+	return err == nil
 }
 
 func prompt(reader *bufio.Reader, label, fallback string) string {
@@ -232,6 +260,13 @@ func chooseWorkspace(reader *bufio.Reader, workspaces []auth.Workspace) string {
 		} else {
 			options[i] = ws.ID
 		}
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		idx := fallbackSelectWithReader(reader, "Select workspace", options)
+		if idx >= 0 && idx < len(workspaces) {
+			return workspaces[idx].ID
+		}
+		return workspaces[0].ID
 	}
 	idx := interactiveSelect("Select workspace", options)
 	if idx >= 0 && idx < len(workspaces) {
@@ -354,12 +389,15 @@ func interactiveSelect(title string, options []string) int {
 
 // fallbackSelect is used when the terminal doesn't support raw mode (pipes, CI).
 func fallbackSelect(title string, options []string) int {
+	return fallbackSelectWithReader(bufio.NewReader(os.Stdin), title, options)
+}
+
+func fallbackSelectWithReader(reader *bufio.Reader, title string, options []string) int {
 	fmt.Printf("\n  %s\n", title)
 	for i, opt := range options {
 		fmt.Printf("    %d. %s\n", i+1, opt)
 	}
 	fmt.Printf("\n  Choose [1-%d]: ", len(options))
-	reader := bufio.NewReader(os.Stdin)
 	text, _ := reader.ReadString('\n')
 	text = strings.TrimSpace(text)
 	n, err := strconv.Atoi(text)
