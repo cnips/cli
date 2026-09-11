@@ -156,6 +156,9 @@ func validateFunctions(root string, report *validationReport) {
 			if fn.Artifact.Spec.Runtime == "" {
 				report.Errorf("functions/%s: spec.runtime is required", fn.Slug)
 			}
+			if _, err := normalizeFunctionMethod(fn.Artifact.Spec.Method()); err != nil {
+				report.Errorf("functions/%s: spec.type must be GET, POST, PUT, or DELETE", fn.Slug)
+			}
 			return nil
 		})
 	}

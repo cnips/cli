@@ -24,6 +24,7 @@ type Result struct {
 	Executable   string // path to the bundled/compiled artifact
 	ServerScript string // wrapper script for HTTP /ping + /execute
 	RunnerScript string // one-shot wrapper script for sources
+	Config       map[string]string
 	IsBun        bool
 	Protocol     string // http | unix
 	Digest       string // sha256 of the built artifact
@@ -44,22 +45,29 @@ func BuildWithOptions(root, name, srcDir string, opts Options) (*Result, error) 
 	if err != nil {
 		return nil, fmt.Errorf("detect language for %s: %w", name, err)
 	}
+	config := functionConfig(srcDir)
 
 	outDir := filepath.Join(project.ArtifactCacheDir(root), name)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
 
+	var result *Result
 	switch lang {
 	case "javascript", "typescript":
-		return buildJS(name, srcDir, outDir, opts)
+		result, err = buildJS(name, srcDir, outDir, opts)
 	case "go":
-		return buildGo(name, srcDir, outDir, opts)
+		result, err = buildGo(name, srcDir, outDir, opts)
 	case "python":
-		return buildPython(name, srcDir, outDir, opts)
+		result, err = buildPython(name, srcDir, outDir, opts)
 	default:
 		return nil, fmt.Errorf("unsupported language %q for %s", lang, name)
 	}
+	if err != nil {
+		return nil, err
+	}
+	result.Config = config
+	return result, nil
 }
 
 // NeedsBuild returns true when the source directory is newer than the last build artifact.
@@ -413,6 +421,18 @@ func countGoExecuteParams(src string) int {
 func readGoEntry(srcDir string) ([]byte, error) {
 	entry := filepath.Join(srcDir, "main.go")
 	return os.ReadFile(entry)
+}
+
+func functionConfig(srcDir string) map[string]string {
+	fn, err := artifact.ParseFunction(srcDir)
+	if err != nil || len(fn.Spec.Config) == 0 {
+		return nil
+	}
+	config := make(map[string]string, len(fn.Spec.Config))
+	for key, value := range fn.Spec.Config {
+		config[key] = value
+	}
+	return config
 }
 
 func JSUsesUnixSocket(srcDir string) bool {
@@ -777,9 +797,19 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const port = process.env.PORT || process.argv[2] || 3000;
+const functionConfig = JSON.parse(process.env.CNIPS_FUNCTION_CONFIG || '{}');
 
 function requestPath(req) {
   return new URL(req.url || '/', 'http://localhost').pathname.replace(/\/+$/, '') || '/';
+}
+
+function applyFunctionConfigHeaders(req) {
+  for (const [key, value] of Object.entries(functionConfig)) {
+    const headerKey = key.toLowerCase();
+    if (req.headers[headerKey] === undefined) {
+      req.headers[headerKey] = String(value);
+    }
+  }
 }
 
 function writeJSON(res, statusCode, value) {
@@ -820,6 +850,7 @@ const server = createServer(async (req, rawRes) => {
     try {
       const rawBody = Buffer.concat(chunks).toString() || '{}';
       req.body = JSON.parse(rawBody);
+      applyFunctionConfigHeaders(req);
       const res = createResponse(rawRes);
       await handleRequest(req, res);
       if (!rawRes.headersSent) writeJSON(rawRes, 204, null);
@@ -866,6 +897,7 @@ module.exports = {
 const goHTTPMainTemplate = `package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"function/handler"
 	"net/http"
@@ -878,16 +910,34 @@ func main() {
 		port = os.Args[1]
 	}
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("pong")) })
-	http.HandleFunc("/execute", handler.HandleRequest)
+	http.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {
+		applyFunctionConfigHeaders(r)
+		handler.HandleRequest(w, r)
+	})
 	if err := http.ListenAndServe(fmt.Sprintf(":%%s", port), nil); err != nil {
 		panic(err)
 	}
+}
+
+func applyFunctionConfigHeaders(r *http.Request) {
+	for key, value := range functionConfig() {
+		if r.Header.Get(key) == "" {
+			r.Header.Set(key, value)
+		}
+	}
+}
+
+func functionConfig() map[string]string {
+	config := map[string]string{}
+	_ = json.Unmarshal([]byte(os.Getenv("CNIPS_FUNCTION_CONFIG")), &config)
+	return config
 }
 `
 
 const goFiberMainTemplate = `package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"function/handler"
 	"os"
@@ -902,10 +952,27 @@ func main() {
 	}
 	app := fiber.New()
 	app.Use("/ping", func(c *fiber.Ctx) error { return c.Send([]byte("pong")) })
-	app.Use("/execute", handler.HandleRequest)
+	app.Use("/execute", func(c *fiber.Ctx) error {
+		applyFunctionConfigHeaders(c)
+		return handler.HandleRequest(c)
+	})
 	if err := app.Listen(fmt.Sprintf(":%s", port)); err != nil {
 		panic(err)
 	}
+}
+
+func applyFunctionConfigHeaders(c *fiber.Ctx) {
+	for key, value := range functionConfig() {
+		if c.Get(key) == "" {
+			c.Request().Header.Set(key, value)
+		}
+	}
+}
+
+func functionConfig() map[string]string {
+	config := map[string]string{}
+	_ = json.Unmarshal([]byte(os.Getenv("CNIPS_FUNCTION_CONFIG")), &config)
+	return config
 }
 `
 
@@ -1071,6 +1138,7 @@ import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 
 
 class Logger:
@@ -1153,6 +1221,7 @@ if __name__ == "__main__":
 const pythonServerTemplate = pythonWrapperTemplate + `
 execute = _load_execute()
 logger = Logger()
+function_config = json.loads(os.environ.get("CNIPS_FUNCTION_CONFIG", "{}"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1165,11 +1234,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
-        self.send_response(404)
-        self.end_headers()
+        self._handle_execute()
 
     def do_POST(self):
-        if self.path != "/execute":
+        self._handle_execute()
+
+    def do_PUT(self):
+        self._handle_execute()
+
+    def do_DELETE(self):
+        self._handle_execute()
+
+    def _handle_execute(self):
+        if urlparse(self.path).path != "/execute":
             self.send_response(404)
             self.end_headers()
             return
@@ -1180,11 +1257,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw) if raw else {}
             if isinstance(body, dict) and ("data" in body or "config" in body or "vars" in body):
                 event = body.get("data", {})
-                config = body.get("config", {})
+                config = body.get("config", function_config)
                 vars = body.get("vars", {})
             else:
                 event = body
-                config = {}
+                config = function_config
                 vars = {}
             result = _run(_call_execute(execute, _component_args(execute, event, config, vars, logger)))
             if result is None:

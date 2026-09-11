@@ -85,6 +85,25 @@ func TestEnsureJSWrappersUseComponentExecuteContract(t *testing.T) {
 	}
 }
 
+func TestPythonServerWrapperSupportsConfiguredFunctionMethods(t *testing.T) {
+	outDir := t.TempDir()
+
+	serverScript, _, err := EnsurePythonWrappers(outDir)
+	if err != nil {
+		t.Fatalf("EnsurePythonWrappers: %v", err)
+	}
+	data, err := os.ReadFile(serverScript)
+	if err != nil {
+		t.Fatalf("read server wrapper: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"def do_GET(self):", "def do_POST(self):", "def do_PUT(self):", "def do_DELETE(self):", "urlparse(self.path).path != \"/execute\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("python server wrapper missing %q", want)
+		}
+	}
+}
+
 func TestWriteExpressHandlerEntryWrapsHandleRequestFunction(t *testing.T) {
 	srcDir := t.TempDir()
 	outDir := t.TempDir()
@@ -119,6 +138,8 @@ async function handleRequest(req, res) {
 	for _, want := range []string{
 		"async function handleRequest(req, res)",
 		"await handleRequest(req, res)",
+		"const functionConfig = JSON.parse(process.env.CNIPS_FUNCTION_CONFIG || '{}')",
+		"req.headers[headerKey] = String(value)",
 		"path === '/ping'",
 		"path !== '/execute'",
 		"createServer",
@@ -134,6 +155,37 @@ async function handleRequest(req, res) {
 	}
 	if !strings.Contains(string(shim), "format(...args)") {
 		t.Fatal("cnips log shim does not format log arguments")
+	}
+}
+
+func TestBuildResultIncludesFunctionConfig(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "functions", "hello")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := `apiVersion: cnips.io/v1
+kind: Function
+metadata:
+  name: hello
+spec:
+  runtime: js
+  config:
+    foo: bar
+`
+	if err := os.WriteFile(filepath.Join(dir, "cnips.fn.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "handler.js"), []byte("async function handleRequest(req, res) { res.json({ ok: req.headers.foo }); }\n"), 0o644); err != nil {
+		t.Fatalf("write handler: %v", err)
+	}
+
+	result, err := BuildWithOptions(root, "hello", dir, Options{})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+	if result.Config["foo"] != "bar" {
+		t.Fatalf("Config[foo] = %q, want bar", result.Config["foo"])
 	}
 }
 
@@ -173,7 +225,8 @@ func HandleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, want := range []string{
 		`"function/handler"`,
-		`http.HandleFunc("/execute", handler.HandleRequest)`,
+		`applyFunctionConfigHeaders(r)`,
+		`handler.HandleRequest(w, r)`,
 		`http.HandleFunc("/ping"`,
 	} {
 		if !strings.Contains(string(wrappedMain), want) {

@@ -438,9 +438,11 @@ func WriteFunctionAs(root string, f *platform.Function, slug string) (string, er
 		},
 		Spec: artifact.FunctionSpec{
 			Runtime:          languageRuntime(f.Language),
+			Type:             firstNonEmpty(f.HTTPMethod, "POST"),
 			Description:      f.Description,
 			Config:           config,
 			APIAccessRef:     f.APIAccessRef,
+			TemplateID:       f.TemplateID,
 			SignatureVersion: f.SignatureVersion,
 			TemplateVersion:  f.TemplateVersion,
 		},
