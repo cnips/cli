@@ -19,6 +19,7 @@ var addOpts struct {
 	Language      string
 	GoFramework   string
 	Description   string
+	Method        string
 }
 
 var addCmd = &cobra.Command{
@@ -45,6 +46,7 @@ Examples:
 			Language:      addOpts.Language,
 			GoFramework:   addOpts.GoFramework,
 			Description:   addOpts.Description,
+			Method:        addOpts.Method,
 		})
 		if err != nil {
 			return err
@@ -63,6 +65,7 @@ func init() {
 	addCmd.Flags().StringVarP(&addOpts.ComponentType, "type", "t", "", "Component type: source, destination, transformation, approval, switch, decision, component, or function")
 	addCmd.Flags().StringVarP(&addOpts.Language, "language", "l", "", "Language: javascript, python, or go")
 	addCmd.Flags().StringVar(&addOpts.GoFramework, "go-framework", "", "Go function framework: http or fiber (Go functions only; default http)")
+	addCmd.Flags().StringVar(&addOpts.Method, "method", "POST", "Function HTTP method: GET, POST, PUT, or DELETE")
 	addCmd.Flags().StringVarP(&addOpts.Description, "description", "d", "", "Description for the generated manifest")
 	rootCmd.AddCommand(addCmd)
 }
@@ -72,6 +75,7 @@ type addOptions struct {
 	Language      string
 	GoFramework   string
 	Description   string
+	Method        string
 }
 
 type addResult struct {
@@ -103,6 +107,11 @@ type scaffoldTemplate struct {
 		PackageJSON string `json:"packageJson"`
 	} `json:"javascript"`
 }
+
+const (
+	goFiberFunctionTemplateID = "b497d08c-36f5-42ab-9ba9-f947743fd68d"
+	goHTTPFunctionTemplateID  = "b6d27d14-f994-4b10-97e8-536602a38719"
+)
 
 func addComponent(root, name string, opts addOptions) (addResult, error) {
 	slug := slugify(strings.TrimSpace(name))
@@ -262,21 +271,21 @@ func templateVersions(kind, lang, goFramework string, tmpl scaffoldTemplate) (si
 	if kind != "function" {
 		return strings.ToLower(tmpl.Version), strings.ToLower(tmpl.Version)
 	}
-	if tmpl.ID != "" {
-		return tmpl.ID, tmpl.ID
+	if tmpl.Type != "" && tmpl.Version != "" {
+		return functionTemplateSignature(tmpl), tmpl.Version
 	}
 	switch lang {
 	case "python":
-		return "python-v1", "python-v1"
+		return "python-v1", "V1"
 	case "go":
-		return signatureVersion, signatureVersion
+		return signatureVersion, templateVersion
 	default:
 		return signatureVersion, templateVersion
 	}
 }
 
 func functionTemplateMatches(tmpl scaffoldTemplate, lang, signatureVersion string) bool {
-	if tmpl.ID != "" && strings.EqualFold(tmpl.ID, signatureVersion) {
+	if tmpl.Type != "" && tmpl.Version != "" && strings.EqualFold(functionTemplateSignature(tmpl), signatureVersion) {
 		return true
 	}
 	switch lang {
@@ -290,6 +299,35 @@ func functionTemplateMatches(tmpl scaffoldTemplate, lang, signatureVersion strin
 	default:
 		return false
 	}
+}
+
+func functionTemplateSignature(tmpl scaffoldTemplate) string {
+	if tmpl.Type == "" || tmpl.Version == "" {
+		return tmpl.ID
+	}
+	return strings.ToLower(tmpl.Type) + "-" + strings.ToLower(tmpl.Version)
+}
+
+func scaffoldFunctionTemplateID(lang, signatureVersion string) string {
+	if lang != "go" {
+		return signatureVersion
+	}
+	switch strings.ToLower(strings.TrimSpace(signatureVersion)) {
+	case "fiber-v2", "go-fiber":
+		return goFiberFunctionTemplateID
+	case "http-v1", "go-http":
+		return goHTTPFunctionTemplateID
+	default:
+		return signatureVersion
+	}
+}
+
+func normalizeFunctionMethod(method string) (string, error) {
+	normalized := artifact.NormalizeFunctionMethod(method)
+	if !artifact.IsSupportedFunctionMethod(normalized) {
+		return "", fmt.Errorf("unsupported function method %q (use GET, POST, PUT, or DELETE)", method)
+	}
+	return normalized, nil
 }
 
 func componentScriptType(kind string) string {
@@ -328,6 +366,10 @@ func addBaseDir(kind string) string {
 }
 
 func writeFunctionScaffold(dir, slug, lang, signatureVersion, templateVersion string, opts addOptions, tmpl scaffoldTemplate) error {
+	method, err := normalizeFunctionMethod(opts.Method)
+	if err != nil {
+		return err
+	}
 	fn := artifact.Function{
 		APIVersion: "cnips.io/v1",
 		Kind:       artifact.KindFunction,
@@ -336,9 +378,11 @@ func writeFunctionScaffold(dir, slug, lang, signatureVersion, templateVersion st
 		},
 		Spec: artifact.FunctionSpec{
 			Runtime:          functionRuntime(lang),
+			Type:             method,
 			Description:      opts.Description,
 			Handler:          functionHandler(lang),
 			Timeout:          "30s",
+			TemplateID:       scaffoldFunctionTemplateID(lang, signatureVersion),
 			SignatureVersion: signatureVersion,
 			TemplateVersion:  templateVersion,
 		},

@@ -30,7 +30,7 @@ The function is rebuilt and restarted whenever a source file changes.
 
 The server exposes:
   GET  /ping      health check (returns 200 ok)
-  POST /execute   execute the function with a JSON body
+  <method> /execute   execute the function with the configured HTTP method
 
 Uses bun (preferred) or node for JavaScript/TypeScript, go for Go, python3 for Python.`,
 	Args: cobra.ExactArgs(1),
@@ -69,6 +69,13 @@ func runFunctionDev(fnName string) error {
 	if err != nil {
 		return err
 	}
+	method := "POST"
+	if fn, err := artifact.ParseFunction(fnDir); err == nil {
+		if !artifact.IsSupportedFunctionMethod(fn.Spec.Method()) {
+			return fmt.Errorf("function %q has unsupported method %q (use GET, POST, PUT, or DELETE)", fnName, fn.Spec.Method())
+		}
+		method = fn.Spec.NormalizedMethod()
+	}
 
 	fmt.Printf("Starting function %q  [lang=%s]\n", fnName, lang)
 	fmt.Printf("Source: %s\n\n", fnDir)
@@ -86,7 +93,7 @@ func runFunctionDev(fnName string) error {
 	}
 
 	fmt.Printf("  Function %q is ready on http://localhost:%d\n", fnName, si.Port)
-	fmt.Printf("  POST http://localhost:%d/execute  with JSON body\n", si.Port)
+	fmt.Printf("  %-6s http://localhost:%d/execute  with JSON body\n", method, si.Port)
 	fmt.Printf("  GET  http://localhost:%d/ping\n\n", si.Port)
 
 	watch, err := fsnotify.NewWatcher()

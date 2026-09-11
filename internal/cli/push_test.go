@@ -225,6 +225,58 @@ func TestComponentToTransformationOmitsPendingBuildForManifestOnlyChange(t *test
 	}
 }
 
+func TestFunctionToPlatformIncludesHTTPMethod(t *testing.T) {
+	item := localFunction{
+		Slug: "enrich",
+		Artifact: artifact.Function{
+			Spec: artifact.FunctionSpec{
+				Runtime:          "nodejs22",
+				Type:             "GET",
+				SignatureVersion: "v3",
+				TemplateVersion:  "V3",
+			},
+		},
+		Source: platform.SourceCode{Script: "async function handleRequest(req, res) {}"},
+	}
+
+	payload := functionToPlatform(item, "workspace-1")
+	if payload.HTTPMethod != "GET" {
+		t.Fatalf("HTTPMethod=%q, want GET", payload.HTTPMethod)
+	}
+	if payload.TemplateID != "express-v3" || payload.SignatureVersion != "express-v3" || payload.TemplateVersion != "V3" {
+		t.Fatalf("unexpected function versions: templateID=%q signatureVersion=%q templateVersion=%q", payload.TemplateID, payload.SignatureVersion, payload.TemplateVersion)
+	}
+
+	item.Artifact.Spec.Type = ""
+	item.Artifact.Spec.TemplateID = " EXPRESS-V3 "
+	item.Artifact.Spec.SignatureVersion = "EXPRESS-V3"
+	payload = functionToPlatform(item, "workspace-1")
+	if payload.HTTPMethod != "POST" {
+		t.Fatalf("HTTPMethod=%q, want POST default", payload.HTTPMethod)
+	}
+	if payload.TemplateID != "express-v3" || payload.SignatureVersion != "express-v3" {
+		t.Fatalf("unexpected normalized versions: templateID=%q signatureVersion=%q", payload.TemplateID, payload.SignatureVersion)
+	}
+
+	item.Artifact.Spec = artifact.FunctionSpec{
+		Runtime:         "go",
+		TemplateVersion: "V2",
+	}
+	payload = functionToPlatform(item, "workspace-1")
+	if payload.TemplateID != goFiberFunctionTemplateID || payload.SignatureVersion != "fiber-v2" {
+		t.Fatalf("unexpected go fiber versions: templateID=%q signatureVersion=%q", payload.TemplateID, payload.SignatureVersion)
+	}
+
+	item.Artifact.Spec = artifact.FunctionSpec{
+		Runtime:         "go",
+		TemplateVersion: "V1",
+	}
+	payload = functionToPlatform(item, "workspace-1")
+	if payload.TemplateID != goHTTPFunctionTemplateID || payload.SignatureVersion != "http-v1" {
+		t.Fatalf("unexpected go http versions: templateID=%q signatureVersion=%q", payload.TemplateID, payload.SignatureVersion)
+	}
+}
+
 func TestComponentToTransformationIncludesSwitchLabels(t *testing.T) {
 	item := localComponent{
 		Slug:    "route-orders",

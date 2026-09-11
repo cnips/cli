@@ -202,14 +202,17 @@ Creates a new CNIPS project with the standard folder structure. If no name is pr
 ### `cnips add`
 
 ```bash
-cnips add <component-name> --type <type> --language <lang> [--go-framework <framework>]
+cnips add <component-name> --type <type> --language <lang> [--go-framework <framework>] [--method <method>]
 ```
 
 **Flags:**
 - `--type, -t` — Component type: `source`, `destination`, `transformation`, `approval`, `switch`, `decision`, `component`, or `function`
 - `--language, -l` — Language: `javascript`, `python`, or `go`
 - `--go-framework` — Go function framework: `http` (default) or `fiber`
+- `--method` — Function HTTP method: `GET`, `POST`, `PUT`, or `DELETE` (`POST` by default)
 - `--description, -d` — Description for the component manifest
+
+Function manifests use lowercase signature versions such as `express-v3`, `http-v1`, `fiber-v2`, and `python-v1`, while `templateVersion` keeps the template value from `function-templates.json` such as `V1`, `V2`, or `V3`. The CLI also sends the matching `templateId` on push so mgmt-srv can build the correct function template. Go HTTP uses template ID `b6d27d14-f994-4b10-97e8-536602a38719`; Go Fiber uses `b497d08c-36f5-42ab-9ba9-f947743fd68d`.
 
 ### `cnips login`
 
@@ -326,7 +329,9 @@ Starts a local HTTP server for function development with file watching. Automati
 
 **Endpoints:**
 - `GET /ping` — Health check
-- `POST /execute` — Execute with JSON body
+- `<method> /execute` — Execute with the method from `functions/<name>/cnips.fn.yaml` (`POST` by default)
+
+For local function development, entries under `spec.config` in `cnips.fn.yaml` are made available as request headers when the incoming request does not already include the same header. This mirrors function-manager behavior, so a config entry such as `foo: bar` can be read in an Express handler with `req.headers["foo"]`.
 
 **Supported Runtimes:**
 - JavaScript/TypeScript (via Bun or Node)

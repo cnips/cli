@@ -1410,12 +1410,56 @@ func functionToPlatform(item localFunction, workspace string) platform.Function 
 		WorkspaceID:      workspace,
 		Description:      firstNonEmpty(fn.Metadata.Description, fn.Spec.Description),
 		Language:         platformLanguage(fn.Spec.Runtime),
-		SignatureVersion: fn.Spec.SignatureVersion,
+		TemplateID:       functionTemplateID(fn.Spec),
+		SignatureVersion: functionSignatureVersion(fn.Spec),
 		TemplateVersion:  fn.Spec.TemplateVersion,
 		APIAccessRef:     fn.Spec.APIAccessRef,
+		HTTPMethod:       fn.Spec.NormalizedMethod(),
 		Config:           stringMapToItems(fn.Spec.Config),
-		SourceCode:       sourceCodePayload(item.Source, componentBuildStatusForChange(item.HasCodeChanges, "FUNCTION", fn.Spec.SignatureVersion, fn.Spec.Runtime)),
+		SourceCode:       sourceCodePayload(item.Source, componentBuildStatusForChange(item.HasCodeChanges, "FUNCTION", functionSignatureVersion(fn.Spec), fn.Spec.Runtime)),
 		Active:           true,
+	}
+}
+
+func functionTemplateID(spec artifact.FunctionSpec) string {
+	if platformLanguage(spec.Runtime) == "golang" {
+		switch functionSignatureVersion(spec) {
+		case "fiber-v2", "go-fiber":
+			return goFiberFunctionTemplateID
+		case "http-v1", "go-http":
+			return goHTTPFunctionTemplateID
+		}
+	}
+	if templateID := strings.ToLower(strings.TrimSpace(spec.TemplateID)); templateID != "" {
+		return templateID
+	}
+	return functionSignatureVersion(spec)
+}
+
+func functionSignatureVersion(spec artifact.FunctionSpec) string {
+	signatureVersion := strings.ToLower(strings.TrimSpace(spec.SignatureVersion))
+	if strings.Contains(signatureVersion, "-") {
+		return signatureVersion
+	}
+	templateVersion := strings.ToLower(strings.TrimSpace(firstNonEmpty(spec.TemplateVersion, signatureVersion)))
+	if templateVersion == "" {
+		templateVersion = "v1"
+	}
+	if !strings.HasPrefix(templateVersion, "v") {
+		templateVersion = "v" + templateVersion
+	}
+	switch platformLanguage(spec.Runtime) {
+	case "javascript":
+		return "express-" + templateVersion
+	case "golang":
+		if templateVersion == "v2" {
+			return "fiber-" + templateVersion
+		}
+		return "http-" + templateVersion
+	case "python":
+		return "python-" + templateVersion
+	default:
+		return signatureVersion
 	}
 }
 

@@ -104,11 +104,12 @@ func TestAddGoFunctionScaffoldsFiberSignature(t *testing.T) {
 		ComponentType: "function",
 		Language:      "go",
 		GoFramework:   "fiber",
+		Method:        "PUT",
 	})
 	if err != nil {
 		t.Fatalf("addComponent: %v", err)
 	}
-	if result.SignatureVersion != "go-fiber" || result.TemplateVersion != "go-fiber" {
+	if result.SignatureVersion != "fiber-v2" || result.TemplateVersion != "V2" {
 		t.Fatalf("unexpected versions: %#v", result)
 	}
 
@@ -116,12 +117,60 @@ func TestAddGoFunctionScaffoldsFiberSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFunction: %v", err)
 	}
-	if fn.Spec.SignatureVersion != "go-fiber" || fn.Spec.TemplateVersion != "go-fiber" {
+	if fn.Spec.TemplateID != goFiberFunctionTemplateID || fn.Spec.SignatureVersion != "fiber-v2" || fn.Spec.TemplateVersion != "V2" || fn.Spec.Type != "PUT" {
 		t.Fatalf("unexpected manifest: %#v", fn.Spec)
 	}
 	assertFileExists(t, filepath.Join(root, "functions", "webhook-fn", "main.go"))
 	assertFileExists(t, filepath.Join(root, "functions", "webhook-fn", "go.mod"))
 	assertFileContains(t, filepath.Join(root, "functions", "webhook-fn", "main.go"), "*fiber.Ctx")
+}
+
+func TestAddFunctionScaffoldsTemplateVersionValuesAndDefaultMethod(t *testing.T) {
+	root := newAddTestProject(t)
+
+	for _, tc := range []struct {
+		name string
+		lang string
+		sig  string
+		tmpl string
+		id   string
+	}{
+		{name: "Node Fn", lang: "javascript", sig: "express-v3", tmpl: "V3", id: "express-v3"},
+		{name: "Python Fn", lang: "python", sig: "python-v1", tmpl: "V1", id: "python-v1"},
+		{name: "Go Fn", lang: "go", sig: "http-v1", tmpl: "V1", id: goHTTPFunctionTemplateID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := addComponent(root, tc.name, addOptions{
+				ComponentType: "function",
+				Language:      tc.lang,
+			})
+			if err != nil {
+				t.Fatalf("addComponent: %v", err)
+			}
+			if result.SignatureVersion != tc.sig || result.TemplateVersion != tc.tmpl {
+				t.Fatalf("unexpected versions: %#v", result)
+			}
+			fn, err := artifact.ParseFunction(filepath.Join(root, "functions", result.Name))
+			if err != nil {
+				t.Fatalf("ParseFunction: %v", err)
+			}
+			if fn.Spec.TemplateID != tc.id || fn.Spec.SignatureVersion != tc.sig || fn.Spec.TemplateVersion != tc.tmpl || fn.Spec.Type != "POST" {
+				t.Fatalf("unexpected manifest: %#v", fn.Spec)
+			}
+		})
+	}
+}
+
+func TestAddFunctionRejectsUnsupportedMethod(t *testing.T) {
+	root := newAddTestProject(t)
+
+	if _, err := addComponent(root, "Bad Method", addOptions{
+		ComponentType: "function",
+		Language:      "javascript",
+		Method:        "PATCH",
+	}); err == nil {
+		t.Fatal("expected error for unsupported function method")
+	}
 }
 
 func TestAddComponentScaffoldsPythonAndGoComponentVersions(t *testing.T) {

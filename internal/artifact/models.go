@@ -1,5 +1,7 @@
 package artifact
 
+import "strings"
+
 // Kind constants
 const (
 	KindProject        = "Project"
@@ -138,17 +140,48 @@ type Function struct {
 
 type FunctionSpec struct {
 	Runtime          string            `yaml:"runtime"` // js, go, python
+	Type             string            `yaml:"type,omitempty"`
+	HTTPMethod       string            `yaml:"httpMethod,omitempty"`
 	Description      string            `yaml:"description,omitempty"`
 	Handler          string            `yaml:"handler,omitempty"` // ./handler.js#default
 	Timeout          string            `yaml:"timeout,omitempty"`
 	Memory           string            `yaml:"memory,omitempty"`
 	Config           map[string]string `yaml:"config,omitempty"`
 	APIAccessRef     string            `yaml:"apiAccessRef,omitempty"`
+	TemplateID       string            `yaml:"templateId,omitempty"`
 	SignatureVersion string            `yaml:"signatureVersion,omitempty"`
 	TemplateVersion  string            `yaml:"templateVersion,omitempty"`
 	Input            *SchemaRef        `yaml:"input,omitempty"`
 	Output           *SchemaRef        `yaml:"output,omitempty"`
 	Env              []EnvVar          `yaml:"env,omitempty"`
+}
+
+func (s FunctionSpec) Method() string {
+	if s.Type != "" {
+		return s.Type
+	}
+	return s.HTTPMethod
+}
+
+func (s FunctionSpec) NormalizedMethod() string {
+	return NormalizeFunctionMethod(s.Method())
+}
+
+func NormalizeFunctionMethod(method string) string {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		return "POST"
+	}
+	return method
+}
+
+func IsSupportedFunctionMethod(method string) bool {
+	switch NormalizeFunctionMethod(method) {
+	case "GET", "POST", "PUT", "DELETE":
+		return true
+	default:
+		return false
+	}
 }
 
 type SchemaRef struct {

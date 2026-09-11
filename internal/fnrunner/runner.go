@@ -20,9 +20,12 @@ import (
 	"time"
 
 	"github.com/cnips/cli/internal/builder"
+	"github.com/google/uuid"
 )
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+var errMissingForwardHeaders = errors.New("function execution requires headers or function config")
 
 // Manager owns all running local processes.
 type Manager struct {
@@ -44,6 +47,7 @@ type ServiceInfo struct {
 	Name        string
 	Port        int
 	SocketPath  string
+	WorkDir     string
 	Cmd         *exec.Cmd
 	cleanupOnce sync.Once
 }
@@ -58,7 +62,19 @@ func (m *Manager) Execute(name string, build *builder.Result, payload string) (s
 	if build.Protocol == "unix" {
 		return executeUnixSocket(si.SocketPath, payload)
 	}
-	return execute(si.Port, payload)
+	return execute(si.Port, "POST", payload, si.WorkDir, m.logs, false)
+}
+
+// ExecuteWithMethod sends the payload to /execute using the selected function HTTP method.
+func (m *Manager) ExecuteWithMethod(name string, build *builder.Result, method, payload string) (string, error) {
+	si, err := m.ensureRunning(name, build)
+	if err != nil {
+		return "", err
+	}
+	if build.Protocol == "unix" {
+		return executeUnixSocket(si.SocketPath, payload)
+	}
+	return execute(si.Port, method, payload, si.WorkDir, m.logs, true)
 }
 
 func (m *Manager) ensureRunning(name string, build *builder.Result) (*ServiceInfo, error) {
@@ -137,8 +153,15 @@ func (m *Manager) launch(name string, build *builder.Result) (*ServiceInfo, erro
 	}
 
 	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port), fmt.Sprintf("APP=%s", name))
+	if len(build.Config) > 0 {
+		configJSON, _ := json.Marshal(build.Config)
+		cmd.Env = append(cmd.Env, fmt.Sprintf("CNIPS_FUNCTION_CONFIG=%s", configJSON))
+	}
 	if socketPath != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("SOCKET_PATH=%s", socketPath))
+	}
+	if build.OutDir != "" {
+		cmd.Dir = build.OutDir
 	}
 	attachCommandLogs(cmd, m.logs)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -147,7 +170,7 @@ func (m *Manager) launch(name string, build *builder.Result) (*ServiceInfo, erro
 		return nil, fmt.Errorf("start %s: %w", name, err)
 	}
 
-	si := &ServiceInfo{Name: name, Port: port, SocketPath: socketPath, Cmd: cmd}
+	si := &ServiceInfo{Name: name, Port: port, SocketPath: socketPath, WorkDir: build.OutDir, Cmd: cmd}
 
 	if err := waitServiceReady(si, build.Protocol, 15*time.Second); err != nil {
 		si.Stop()
@@ -204,8 +227,20 @@ func (m *Manager) StartDev(name string, buildFn func() (*builder.Result, error))
 // HTTP helpers
 // -----------------------------------------------------------------------
 
-func execute(port int, payload string) (string, error) {
+func execute(port int, method, payload, logDir string, logs io.Writer, requireForwardHeaders bool) (string, error) {
 	url := fmt.Sprintf("http://localhost:%d/execute", port)
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		method = "POST"
+	}
+	requestID := uuid.NewString()
+	forwardHeaders, err := forwardHeadersFromPayload(payload)
+	if err != nil {
+		return "", err
+	}
+	if requireForwardHeaders && len(forwardHeaders) == 0 {
+		return "", errMissingForwardHeaders
+	}
 
 	// Wrap in { "data": ..., "config": {}, "vars": {} } envelope if not already.
 	var reqBody string
@@ -216,17 +251,24 @@ func execute(port int, payload string) (string, error) {
 		reqBody = string(b)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBufferString(reqBody))
+	req, err := http.NewRequest(method, url, bytes.NewBufferString(reqBody))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	for key, value := range forwardHeaders {
+		req.Header.Set(key, value)
+	}
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Request-ID", requestID)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	defer collectRequestLog(logDir, requestID, logs)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -261,7 +303,33 @@ func executeUnixSocket(socketPath, payload string) (string, error) {
 
 // ExecuteOnPort is exported for direct use by the runtime engine.
 func ExecuteOnPort(port int, payload string) (string, error) {
-	return execute(port, payload)
+	return execute(port, "POST", payload, "", nil, false)
+}
+
+func forwardHeadersFromPayload(payload string) (map[string]string, error) {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		return nil, nil
+	}
+	if headers := stringifyMap(body["headers"]); len(headers) > 0 {
+		return headers, nil
+	}
+	return stringifyMap(body["config"]), nil
+}
+
+func collectRequestLog(logDir, requestID string, logs io.Writer) {
+	if logs == nil || logDir == "" || requestID == "" {
+		return
+	}
+	logPath := filepath.Join(logDir, requestID+".log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return
+	}
+	if len(data) > 0 {
+		fmt.Fprintf(logs, "\n[function logs] request=%s\n%s\n", requestID, strings.TrimRight(string(data), "\n"))
+	}
+	_ = os.Remove(logPath)
 }
 
 func pluginRequest(payload string) (string, error) {
@@ -502,7 +570,7 @@ func RunDevServerWithLogs(name, srcDir, lang string, logs io.Writer) (*ServiceIn
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
-	return &ServiceInfo{Name: name, Port: port, Cmd: cmd}, nil
+	return &ServiceInfo{Name: name, Port: port, WorkDir: srcDir, Cmd: cmd}, nil
 }
 
 func attachCommandLogs(cmd *exec.Cmd, logs io.Writer) {

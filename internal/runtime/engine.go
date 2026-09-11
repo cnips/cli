@@ -859,7 +859,12 @@ func executeFunction(
 
 	resolvedPayload := resolveTemplate(payload, ctx, envVars)
 	with := cloneStepWith(step.With)
+	method := "POST"
 	if fn, err := artifact.ParseFunction(fnDir); err == nil {
+		if !artifact.IsSupportedFunctionMethod(fn.Spec.Method()) {
+			return "", fmt.Errorf("function %q has unsupported method %q (use GET, POST, PUT, or DELETE)", fnName, fn.Spec.Method())
+		}
+		method = fn.Spec.NormalizedMethod()
 		for k, v := range fn.Spec.Config {
 			if _, exists := with[k]; !exists {
 				with[k] = v
@@ -887,7 +892,7 @@ func executeFunction(
 	}
 
 	envelope := buildEnvelope(resolvedPayload, with, envVars)
-	return mgr.Execute(fnName, build, envelope)
+	return mgr.ExecuteWithMethod(fnName, build, method, envelope)
 }
 
 func executeLocalComponent(
@@ -1636,6 +1641,7 @@ func inferBuildResult(name, srcDir, outDir string) *builder.Result {
 				Language:   candidate.lang,
 				OutDir:     outDir,
 				Executable: exec,
+				Config:     functionConfig(srcDir),
 				IsBun:      candidate.bun,
 			}
 			if candidate.lang == "go" && builder.GoUsesUnixSocket(srcDir) {
@@ -1669,7 +1675,19 @@ func inferBuildResult(name, srcDir, outDir string) *builder.Result {
 			return result
 		}
 	}
-	return &builder.Result{Name: name, Language: "javascript", OutDir: outDir, Executable: filepath.Join(outDir, "main.mjs"), IsBun: true}
+	return &builder.Result{Name: name, Language: "javascript", OutDir: outDir, Executable: filepath.Join(outDir, "main.mjs"), Config: functionConfig(srcDir), IsBun: true}
+}
+
+func functionConfig(srcDir string) map[string]string {
+	fn, err := artifact.ParseFunction(srcDir)
+	if err != nil || len(fn.Spec.Config) == 0 {
+		return nil
+	}
+	config := make(map[string]string, len(fn.Spec.Config))
+	for key, value := range fn.Spec.Config {
+		config[key] = value
+	}
+	return config
 }
 
 // decodeBodySteps converts []any (from YAML) back to []artifact.Step.

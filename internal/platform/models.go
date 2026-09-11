@@ -212,9 +212,11 @@ type Function struct {
 	PluginFileName   string        `json:"pluginFileName,omitempty"`
 	Description      string        `json:"description"`
 	Language         string        `json:"language"`
+	TemplateID       string        `json:"templateId,omitempty"`
 	SignatureVersion string        `json:"signatureVersion"`
 	TemplateVersion  string        `json:"templateVersion"`
 	APIAccessRef     string        `json:"apiAccessRef"`
+	HTTPMethod       string        `json:"httpMethod,omitempty"`
 	Config           []ConfigItem  `json:"config"`
 	Versions         []VersionInfo `json:"versions,omitempty"`
 	TimeoutMS        int64         `json:"timeoutMS"`
