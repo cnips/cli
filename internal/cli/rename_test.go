@@ -3,6 +3,8 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/cnips/cli/internal/artifact"
@@ -55,6 +57,55 @@ spec:
 	}
 	if got := pipeline.Spec.Steps[0].Uses; got != "transformation/normalize-order@latest" {
 		t.Fatalf("uses=%q, want renamed reference", got)
+	}
+}
+
+func TestRenameTransformationsInParallelSerializeProjectMetadata(t *testing.T) {
+	root := newRenameTestProject(t)
+	for i := 1; i <= 8; i++ {
+		suffix := strconv.Itoa(i)
+		name := "rename-src-" + suffix
+		writeTestFile(t, root, "transformations/"+name+"/component.yaml", `apiVersion: cnips.io/v1
+kind: Component
+metadata:
+  id: tx-`+suffix+`
+  name: `+name+`
+spec:
+  type: transformation
+  language: javascript
+`)
+		writeTestFile(t, root, "transformations/"+name+"/handler.js", "export default async function handler() {}\n")
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 8)
+	var wg sync.WaitGroup
+	for i := 1; i <= 8; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			suffix := strconv.Itoa(i)
+			oldName := "rename-src-" + suffix
+			newName := "rename-dst-" + suffix
+			_, err := renameArtifact(root, "transformation", oldName, newName)
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel rename failed: %v", err)
+		}
+	}
+	for i := 1; i <= 8; i++ {
+		if _, err := os.Stat(filepath.Join(root, "transformations", "rename-dst-"+strconv.Itoa(i))); err != nil {
+			t.Fatalf("renamed directory %d missing: %v", i, err)
+		}
 	}
 }
 

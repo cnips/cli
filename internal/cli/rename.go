@@ -69,6 +69,17 @@ type renameTarget struct {
 }
 
 func renameArtifact(root, kind, oldName, newName string) (renameResult, error) {
+	lock, err := acquireProjectWriteLock(root, "rename")
+	if err != nil {
+		return renameResult{}, err
+	}
+	defer func() {
+		_ = lock.Release("rename")
+	}()
+	return renameArtifactLocked(root, kind, oldName, newName)
+}
+
+func renameArtifactLocked(root, kind, oldName, newName string) (renameResult, error) {
 	target, err := resolveRenameTarget(root, kind, oldName, newName)
 	if err != nil {
 		return renameResult{}, err

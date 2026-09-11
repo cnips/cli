@@ -72,7 +72,7 @@ func commandAllowedWithoutToken(cmd *cobra.Command) bool {
 		return true
 	}
 	switch cmd.Name() {
-	case "init", "login", "logout", "discard", "help", "completion":
+	case "init", "login", "logout", "discard", "add", "rename", "fmt", "help", "completion":
 		return true
 	default:
 		return false
