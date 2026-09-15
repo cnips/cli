@@ -47,7 +47,7 @@ func TestRequireTokenForCommandAllowsExplicitTokenFlag(t *testing.T) {
 func TestRequireTokenForCommandAllowsAuthLifecycleCommands(t *testing.T) {
 	t.Setenv("CNIPS_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 
-	for _, name := range []string{"init", "login", "logout", "discard", "help"} {
+	for _, name := range []string{"init", "login", "logout", "discard", "add", "rename", "fmt", "help"} {
 		cmd := &cobra.Command{Use: name}
 		if err := requireTokenForCommand(cmd, nil); err != nil {
 			t.Fatalf("%s should be allowed without token: %v", name, err)
