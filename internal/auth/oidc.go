@@ -376,6 +376,41 @@ func APIURLFromOrigin(baseURL string) string {
 	return baseURL + "/mgmt-srv"
 }
 
+// NormalizeAPIURL cleans an explicitly provided mgmt-srv URL and ensures it
+// targets the /mgmt-srv base path. It trims surrounding whitespace and any
+// trailing slashes, and appends /mgmt-srv when the suffix is missing.
+// Loopback/direct hosts (localhost, 127.0.0.1, ::1, 0.0.0.0) are left
+// untouched, because a locally run mgmt-srv serves its API at the root.
+func NormalizeAPIURL(apiURL string) string {
+	apiURL = strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	if apiURL == "" {
+		return apiURL
+	}
+	if strings.HasSuffix(apiURL, "/mgmt-srv") {
+		return apiURL
+	}
+	if isLoopbackAPIURL(apiURL) {
+		return apiURL
+	}
+	return apiURL + "/mgmt-srv"
+}
+
+func isLoopbackAPIURL(apiURL string) bool {
+	parsed, err := url.Parse(apiURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 func openBrowser(u string) error {
 	var cmd string
 	var args []string
