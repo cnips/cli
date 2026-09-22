@@ -424,6 +424,35 @@ func TestRunLogoutClearsOnlyTokenFields(t *testing.T) {
 	}
 }
 
+func TestRunLoginAppendsMgmtSrvPathToRemoteAPIURL(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+
+	cmd := newLoginTestCommand()
+	_ = cmd.Flags().Set("api-url", "https://dev.cnips.eu/")
+	_ = cmd.Flags().Set("token", "Bearer test-token")
+	_ = cmd.Flags().Set("workspace", "default")
+	_ = cmd.Flags().Set("skip-verify", "true")
+	if err := runLogin(cmd, nil); err != nil {
+		t.Fatalf("login execute: %v", err)
+	}
+
+	cfg, err := auth.Load()
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	profile, ok := cfg.Current()
+	if !ok {
+		t.Fatal("current profile missing")
+	}
+	if profile.APIURL != "https://dev.cnips.eu/mgmt-srv" {
+		t.Fatalf("apiURL = %q, want https://dev.cnips.eu/mgmt-srv", profile.APIURL)
+	}
+	if profile.BaseURL != "https://dev.cnips.eu" {
+		t.Fatalf("baseURL = %q, want https://dev.cnips.eu", profile.BaseURL)
+	}
+}
+
 func newLoginTestCommand() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("base-url", "", "")

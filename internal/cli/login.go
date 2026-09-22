@@ -81,7 +81,11 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if baseURL == "" {
 		baseURL = auth.OriginFromAPIURL(apiURL)
 	}
-	if !cmd.Flags().Changed("api-url") && baseURL != "" {
+	if cmd.Flags().Changed("api-url") {
+		// Honor an explicit --api-url but ensure it targets the /mgmt-srv
+		// base path (except for local/direct hosts that serve at the root).
+		apiURL = auth.NormalizeAPIURL(apiURL)
+	} else if baseURL != "" {
 		apiURL = auth.APIURLFromOrigin(baseURL)
 	}
 

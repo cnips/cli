@@ -35,3 +35,27 @@ func TestUserFromTokenDecodesClaimsAndGroups(t *testing.T) {
 		t.Fatalf("claims were not preserved: %#v", user.Claims)
 	}
 }
+
+func TestNormalizeAPIURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"remote without suffix", "https://dev.cnips.eu", "https://dev.cnips.eu/mgmt-srv"},
+		{"remote trailing slash", "https://dev.cnips.eu/", "https://dev.cnips.eu/mgmt-srv"},
+		{"remote whitespace", "  https://dev.cnips.eu  ", "https://dev.cnips.eu/mgmt-srv"},
+		{"remote already has suffix", "https://dev.cnips.eu/mgmt-srv", "https://dev.cnips.eu/mgmt-srv"},
+		{"remote suffix trailing slash", "https://dev.cnips.eu/mgmt-srv/", "https://dev.cnips.eu/mgmt-srv"},
+		{"localhost untouched", "http://localhost:8090", "http://localhost:8090"},
+		{"loopback ip untouched", "http://127.0.0.1:8090", "http://127.0.0.1:8090"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeAPIURL(tc.in); got != tc.want {
+				t.Fatalf("NormalizeAPIURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
