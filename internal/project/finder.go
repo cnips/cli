@@ -3,6 +3,8 @@
 package project
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,17 +38,39 @@ func MustFindRoot() string {
 	return root
 }
 
-// CacheDir returns the path of the .cnips/cache directory.
-func CacheDir(root string) string { return filepath.Join(root, ".cnips", "cache") }
+// DataDir keeps generated state outside the repository. This prevents multiple
+// initialized repositories from sharing or accidentally committing CLI state.
+func DataDir(root string) string {
+	base := os.Getenv("CNIPS_DATA_DIR")
+	if base == "" {
+		if configDir, err := os.UserConfigDir(); err == nil {
+			base = filepath.Join(configDir, "cnips", "projects")
+		} else {
+			base = filepath.Join(os.TempDir(), "cnips", "projects")
+		}
+	}
+	abs, err := filepath.Abs(root)
+	if err == nil {
+		root = abs
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(root)))
+	return filepath.Join(base, fmt.Sprintf("%x", sum[:12]))
+}
+
+// CacheDir returns the per-project cache directory in the user's config area.
+func CacheDir(root string) string { return filepath.Join(DataDir(root), "cache") }
 
 // ArtifactCacheDir returns the path where built component artifacts are stored.
-func ArtifactCacheDir(root string) string { return filepath.Join(root, ".cnips", "cache", "artifacts") }
+func ArtifactCacheDir(root string) string { return filepath.Join(CacheDir(root), "artifacts") }
 
 // TraceDir returns the path where local run traces are stored.
-func TraceDir(root string) string { return filepath.Join(root, ".cnips", "traces") }
+func TraceDir(root string) string { return filepath.Join(DataDir(root), "traces") }
 
-// StateDir returns the path of the .cnips/state directory.
-func StateDir(root string) string { return filepath.Join(root, ".cnips", "state") }
+// StateDir returns the per-project state directory in the user's config area.
+func StateDir(root string) string { return filepath.Join(DataDir(root), "state") }
+
+// ManifestDir separates sync manifests from other mutable state.
+func ManifestDir(root string) string { return filepath.Join(DataDir(root), "manifests") }
 
 // EnsureDirs creates the standard .cnips runtime directories.
 func EnsureDirs(root string) error {
@@ -55,11 +79,17 @@ func EnsureDirs(root string) error {
 		ArtifactCacheDir(root),
 		TraceDir(root),
 		StateDir(root),
-		filepath.Join(root, ".cnips", "cache", "schemas"),
+		filepath.Join(CacheDir(root), "schemas"),
 	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	return nil
+	metadata, err := json.MarshalIndent(map[string]string{"projectPath": filepath.Clean(root)}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(DataDir(root), "project.json"), append(metadata, '\n'), 0o600)
 }
+
+func RemoveData(root string) error { return os.RemoveAll(DataDir(root)) }

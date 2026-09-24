@@ -400,7 +400,7 @@ func renameLockEntry(root string, target renameTarget) error {
 }
 
 func remapWorkspaceManifestPaths(root, oldPrefix, newPrefix string) (int, error) {
-	stateDir := filepath.Join(root, ".cnips", "state", "workspaces")
+	stateDir := filepath.Join(project.ManifestDir(root), "workspaces")
 	entries, err := os.ReadDir(stateDir)
 	if os.IsNotExist(err) {
 		return 0, nil

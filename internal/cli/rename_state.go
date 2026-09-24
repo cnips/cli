@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cnips/cli/internal/artifact"
+	"github.com/cnips/cli/internal/project"
 )
 
 type renameState struct {
@@ -76,7 +77,7 @@ func writeRenameState(root string, state *renameState) error {
 }
 
 func renameStatePath(root string) string {
-	return filepath.Join(root, ".cnips", "state", "renames.json")
+	return filepath.Join(project.StateDir(root), "renames.json")
 }
 
 func renameAliasesForCompare(localRoot, remoteRoot string) ([]renameRecord, error) {

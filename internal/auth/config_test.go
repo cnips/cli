@@ -1,10 +1,169 @@
 package auth
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestConfigStoresLoginArrayAndResolvesRepositoryWorkspace(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	repoOne, repoTwo := filepath.Join(t.TempDir(), "one"), filepath.Join(t.TempDir(), "two")
+	cfg := &Config{}
+	cfg.UpsertForDirectory(Profile{Name: "dev", UserID: "user-1", BaseURL: "https://cnips.example", APIURL: "https://cnips.example/mgmt-srv", Token: "one", WorkspaceID: "ws-one", WorkspaceName: "Workspace One"}, repoOne)
+	cfg.UpsertForDirectory(Profile{Name: "dev", UserID: "user-1", BaseURL: "https://cnips.example", APIURL: "https://cnips.example/mgmt-srv", Token: "two", WorkspaceID: "ws-two", WorkspaceName: "Workspace Two"}, repoTwo)
+	if len(cfg.Logins) != 2 {
+		t.Fatalf("logins = %d, want two unique userId+baseUrl+workspaceName logins", len(cfg.Logins))
+	}
+	if err := Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["logins"]; !ok {
+		t.Fatal("config does not contain logins array")
+	}
+	if _, ok := stored["profiles"]; ok {
+		t.Fatal("legacy profiles map should not be written")
+	}
+	if !strings.Contains(string(data), `"directory"`) || !strings.Contains(string(data), `"workspaceName"`) {
+		t.Fatalf("config should persist directory and workspace name: %s", data)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok := loaded.CurrentForDirectory(filepath.Join(repoOne, "nested"))
+	if !ok || first.WorkspaceID != "ws-one" {
+		t.Fatalf("repo one profile = %#v, %v", first, ok)
+	}
+	second, ok := loaded.CurrentForDirectory(repoTwo)
+	if !ok || second.WorkspaceID != "ws-two" || second.Token != "two" {
+		t.Fatalf("repo two profile = %#v, %v", second, ok)
+	}
+}
+
+func TestLoginKeyIncludesWorkspaceName(t *testing.T) {
+	base := Profile{UserID: "user-1", BaseURL: "https://cnips.example", WorkspaceID: "same-id"}
+	one := base
+	one.WorkspaceName = "Workspace One"
+	two := base
+	two.WorkspaceName = "Workspace Two"
+	if LoginKey(one) == LoginKey(two) {
+		t.Fatalf("workspace name must be part of login identity: %q", LoginKey(one))
+	}
+}
+
+func TestLoadMigratesLegacyProfilesMap(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	legacy := `{"currentProfile":"dev","profiles":{"dev":{"name":"dev","apiUrl":"https://example.test/mgmt-srv","token":"token"}}}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Logins) != 1 || cfg.Logins[0].Name != "dev" {
+		t.Fatalf("legacy config not migrated: %#v", cfg.Logins)
+	}
+}
+
+func TestLatestLoginOwnsRepositoryMappingWithoutDeletingOtherAccount(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &Config{}
+	cfg.UpsertForDirectory(Profile{Name: "one", UserID: "user-1", BaseURL: "https://one.example", Token: "one"}, repo)
+	cfg.UpsertForDirectory(Profile{Name: "two", UserID: "user-2", BaseURL: "https://two.example", Token: "two"}, repo)
+	if len(cfg.Logins) != 2 {
+		t.Fatalf("logins = %d, want 2", len(cfg.Logins))
+	}
+	profile, ok := cfg.ForDirectory(repo)
+	if !ok || profile.UserID != "user-2" {
+		t.Fatalf("repository login = %#v, %v", profile, ok)
+	}
+}
+
+func TestSetWorkspaceForDirectoryMovesMappingToWorkspaceIdentity(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &Config{}
+	cfg.UpsertForDirectory(Profile{
+		Name:          "dev",
+		UserID:        "user-1",
+		BaseURL:       "https://cnips.example",
+		Token:         "token",
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "Workspace One",
+		Workspaces: []Workspace{
+			{ID: "ws-1", Name: "Workspace One"},
+			{ID: "ws-2", Name: "Workspace Two"},
+		},
+	}, repo)
+	original, _ := cfg.ForDirectory(repo)
+
+	if !cfg.SetWorkspaceForDirectory(LoginKey(original), repo, "ws-2") {
+		t.Fatal("SetWorkspaceForDirectory returned false")
+	}
+	if len(cfg.Logins) != 2 {
+		t.Fatalf("logins = %d, want one identity per workspace", len(cfg.Logins))
+	}
+	selected, ok := cfg.ForDirectory(repo)
+	if !ok || selected.WorkspaceID != "ws-2" || selected.WorkspaceName != "Workspace Two" {
+		t.Fatalf("directory login = %#v, %v", selected, ok)
+	}
+	if LoginKey(original) == LoginKey(selected) {
+		t.Fatal("switching workspaces must change the login identity")
+	}
+}
+
+func TestLoadSplitsLegacyRepositoryWorkspaceMappings(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("CNIPS_CONFIG", configPath)
+	repoOne, repoTwo := filepath.Join(t.TempDir(), "one"), filepath.Join(t.TempDir(), "two")
+	legacy := Config{
+		CurrentProfile: "dev",
+		Logins: []Profile{{
+			Name:        "dev",
+			UserID:      "user-1",
+			BaseURL:     "https://cnips.example",
+			WorkspaceID: "ws-2",
+			Workspaces:  []Workspace{{ID: "ws-1", Name: "Workspace One"}, {ID: "ws-2", Name: "Workspace Two"}},
+			Repositories: []Repository{
+				{Directory: repoOne, WorkspaceID: "ws-1"},
+				{Directory: repoTwo, WorkspaceID: "ws-2"},
+			},
+		}},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Logins) != 2 {
+		t.Fatalf("migrated logins = %d, want 2", len(cfg.Logins))
+	}
+	first, firstOK := cfg.ForDirectory(repoOne)
+	second, secondOK := cfg.ForDirectory(repoTwo)
+	if !firstOK || first.WorkspaceName != "Workspace One" || !secondOK || second.WorkspaceName != "Workspace Two" {
+		t.Fatalf("migrated mappings: first=%#v (%v), second=%#v (%v)", first, firstOK, second, secondOK)
+	}
+}
 
 func TestSaveLoadCurrentProfile(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")

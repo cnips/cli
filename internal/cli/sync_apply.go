@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cnips/cli/internal/project"
 )
 
 type conflictState struct {
@@ -162,7 +164,7 @@ func writeConflictState(root, workspace string, state *conflictState) error {
 }
 
 func conflictStatePath(root, workspace string) string {
-	return filepath.Join(root, ".cnips", "state", "workspaces", safeStateName(workspace), "conflicts.json")
+	return filepath.Join(project.StateDir(root), "workspaces", safeStateName(workspace), "conflicts.json")
 }
 
 func updateLocalManifestForRemoteChanges(root, workspace string, changes []fileChange) error {

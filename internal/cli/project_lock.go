@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/cnips/cli/internal/project"
 )
 
 type projectWriteLock struct {
@@ -12,7 +14,7 @@ type projectWriteLock struct {
 }
 
 func acquireProjectWriteLock(root, operation string) (*projectWriteLock, error) {
-	lockDir := filepath.Join(root, ".cnips")
+	lockDir := filepath.Join(project.StateDir(root), "locks")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {
 		return nil, fmt.Errorf("prepare project lock for %s: %w", operation, err)
 	}

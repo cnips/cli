@@ -1,5 +1,5 @@
 // Package builder compiles local components and functions to runnable artifacts.
-// Outputs land in <project-root>/.cnips/cache/artifacts/<name>/.
+// Outputs land in the per-project cache under the user's config directory.
 package builder
 
 import (

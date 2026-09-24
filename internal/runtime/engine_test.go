@@ -36,6 +36,13 @@ func TestInferBuildResultEnsuresJSWrappersForCachedArtifact(t *testing.T) {
 	}
 }
 
+func TestRunComponentRejectsMissingTarget(t *testing.T) {
+	_, err := RunComponent(ComponentRunOptions{Root: t.TempDir(), Kind: "transformation", Name: "missing", Payload: `{}`})
+	if err == nil || !strings.Contains(err.Error(), "not found locally") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestProcessorNativeDataMapper(t *testing.T) {
 	step := &artifact.Step{
 		ID:   "mapper",

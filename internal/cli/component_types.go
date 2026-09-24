@@ -15,6 +15,7 @@ var transformationFamilyBases = []componentBase{
 }
 
 var localComponentBases = []componentBase{
+	{dir: "components", kind: "component"},
 	{dir: "transformations", kind: "transformation"},
 	{dir: "approvals", kind: "approval"},
 	{dir: "switches", kind: "switch"},

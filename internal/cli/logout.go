@@ -1,20 +1,27 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/cnips/cli/internal/auth"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Log out of the cnips CLI",
-	Long: `Removes the saved access token for the current profile.
+	Long: `Removes the saved access token for a login.
 
-The profile configuration, tenant, available workspaces, and selected workspace
-are kept so the next cnips login can reuse the same workspace automatically.`,
+Inside a directory mapped by cnips login, that directory's login is logged out
+directly. Outside a mapped directory, an interactive list shows every logged-in
+user, base URL, and workspace.
+
+The login configuration and directory mapping are kept so the next cnips login
+can reuse the same workspace automatically.`,
 	RunE: runLogout,
 }
 
@@ -32,26 +39,55 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	name := profileName
-	if name == "" {
-		name = cfg.CurrentProfile
+	var profile auth.Profile
+	var ok bool
+	if strings.TrimSpace(profileName) != "" {
+		profile, ok = cfg.Find(profileName)
+	} else if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		profile, ok = cfg.ForDirectory(cwd)
 	}
-	profile, ok := cfg.Profiles[name]
+	if !ok && strings.TrimSpace(profileName) == "" {
+		available := make([]auth.Profile, 0, len(cfg.Logins))
+		options := make([]string, 0, len(cfg.Logins))
+		for _, candidate := range cfg.Logins {
+			if strings.TrimSpace(candidate.Token) == "" {
+				continue
+			}
+			available = append(available, candidate)
+			user := candidate.UserID
+			if candidate.User != nil {
+				user = firstNonEmpty(candidate.User.Email, candidate.User.PreferredUsername, candidate.User.Name, candidate.User.Subject, user)
+			}
+			options = append(options, fmt.Sprintf("%s — %s — %s", firstNonEmpty(user, candidate.Name), firstNonEmpty(candidate.BaseURL, candidate.APIURL), firstNonEmpty(candidate.WorkspaceName, candidate.WorkspaceID, "default")))
+		}
+		if len(available) > 0 {
+			idx := -1
+			if term.IsTerminal(int(os.Stdin.Fd())) {
+				idx = interactiveSelect("Select login to log out", options)
+			} else {
+				idx = fallbackSelectWithReader(bufio.NewReader(os.Stdin), "Select login to log out", options)
+			}
+			if idx < 0 || idx >= len(available) {
+				return fmt.Errorf("logout cancelled")
+			}
+			profile, ok = available[idx], true
+		}
+	}
 	if !ok {
-		if name == "" {
+		if strings.TrimSpace(profileName) == "" {
 			fmt.Println("Already logged out.")
 			return nil
 		}
-		return fmt.Errorf("profile %q does not exist", name)
+		return fmt.Errorf("profile %q does not exist", profileName)
 	}
 	clearProfileTokenCache(profile, envName)
-	if !cfg.ClearToken(name) {
-		return fmt.Errorf("profile %q does not exist", name)
+	if !cfg.ClearToken(auth.LoginKey(profile)) {
+		return fmt.Errorf("login no longer exists")
 	}
 	if err := auth.Save(cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Logged out of profile %q. Workspace configuration was kept.\n", name)
+	fmt.Printf("Logged out %s from %s (workspace %s). Workspace configuration was kept.\n", firstNonEmpty(profile.UserID, profile.Name), firstNonEmpty(profile.BaseURL, profile.APIURL), firstNonEmpty(profile.WorkspaceName, profile.WorkspaceID, "default"))
 	return nil
 }
 

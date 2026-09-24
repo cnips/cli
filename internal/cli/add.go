@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,9 +10,11 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/cnips/cli/internal/artifact"
 	"github.com/cnips/cli/internal/project"
+	cnipstemplates "github.com/cnips/cli/templates"
 )
 
 var addOpts struct {
@@ -31,8 +34,31 @@ Examples:
   cnips add normalize-order --type transformation --language javascript
   cnips add http-orders --type source --language go
   cnips add enrich-customer --type function --language go --go-framework fiber`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		reader := bufio.NewReader(os.Stdin)
+		if len(args) == 0 {
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return fmt.Errorf("component name is mandatory")
+			}
+			name := prompt(reader, "Component name (mandatory)", "")
+			if name == "" {
+				return fmt.Errorf("component name is mandatory")
+			}
+			args = []string{name}
+		}
+		if strings.TrimSpace(addOpts.ComponentType) == "" && term.IsTerminal(int(os.Stdin.Fd())) {
+			options := []string{"transformation", "source", "destination", "approval", "switch", "decision", "component", "function"}
+			if selected := interactiveSelect("Select component type (mandatory)", options); selected >= 0 {
+				addOpts.ComponentType = options[selected]
+			}
+		}
+		if strings.TrimSpace(addOpts.Language) == "" && term.IsTerminal(int(os.Stdin.Fd())) {
+			options := []string{"javascript", "python", "go"}
+			if selected := interactiveSelect("Select language (mandatory)", options); selected >= 0 {
+				addOpts.Language = options[selected]
+			}
+		}
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -64,6 +90,8 @@ Examples:
 func init() {
 	addCmd.Flags().StringVarP(&addOpts.ComponentType, "type", "t", "", "Component type: source, destination, transformation, approval, switch, decision, component, or function")
 	addCmd.Flags().StringVarP(&addOpts.Language, "language", "l", "", "Language: javascript, python, or go")
+	addCmd.Flags().Lookup("type").Annotations = map[string][]string{"cnips_mandatory": {"true"}}
+	addCmd.Flags().Lookup("language").Annotations = map[string][]string{"cnips_mandatory": {"true"}}
 	addCmd.Flags().StringVar(&addOpts.GoFramework, "go-framework", "", "Go function framework: http or fiber (Go functions only; default http)")
 	addCmd.Flags().StringVar(&addOpts.Method, "method", "POST", "Function HTTP method: GET, POST, PUT, or DELETE")
 	addCmd.Flags().StringVarP(&addOpts.Description, "description", "d", "", "Description for the generated manifest")
@@ -476,17 +504,23 @@ func loadScaffoldTemplates(functions bool) ([]scaffoldTemplate, error) {
 	if functions {
 		fileName = "function-templates.json"
 	}
-	path, err := templateResourcePath(fileName)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+	var data []byte
+	var err error
+	if dir := strings.TrimSpace(os.Getenv("CNIPS_TEMPLATE_RESOURCES")); dir != "" {
+		path := filepath.Join(dir, fileName)
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+	} else {
+		data, err = cnipstemplates.Read(fileName)
+		if err != nil {
+			return nil, fmt.Errorf("read embedded template %s: %w", fileName, err)
+		}
 	}
 	var templates []scaffoldTemplate
 	if err := json.Unmarshal(data, &templates); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse template %s: %w", fileName, err)
 	}
 	return templates, nil
 }

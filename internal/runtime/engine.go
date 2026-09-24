@@ -1,6 +1,6 @@
 // Package runtime implements the local pipeline execution engine.
 // It parses pipeline.yaml, traverses the DAG, executes native and
-// local-component steps, and writes a trace file under .cnips/traces/.
+// local-component steps, and writes traces in the per-project user data area.
 package runtime
 
 import (
@@ -40,6 +40,70 @@ type RunOptions struct {
 	LogPath      string
 }
 
+type ComponentRunOptions struct {
+	Root        string
+	Kind        string
+	Name        string
+	Payload     string
+	Environment string
+	LogWriter   io.Writer
+	Progress    io.Writer
+}
+
+// RunComponent executes one local component/function without requiring a
+// synthetic pipeline on disk.
+func RunComponent(opts ComponentRunOptions) (string, error) {
+	if err := project.EnsureDirs(opts.Root); err != nil {
+		return "", err
+	}
+	envVars := make(map[string]string)
+	//loadProjectResourceVars(opts.Root, envVars)
+	// if opts.Environment != "" {
+	// 	if env, err := artifact.ParseEnvironment(opts.Root, opts.Environment); err == nil {
+	// 		for key, value := range env.Spec.Variables {
+	// 			envVars[key] = value
+	// 		}
+	// 	}
+	// }
+	kind := strings.ToLower(strings.TrimSpace(opts.Kind))
+	supportedKinds := map[string]bool{"component": true, "function": true, "source": true, "destination": true, "transformation": true, "approval": true, "switch": true, "decision": true, "app": true}
+	if !supportedKinds[kind] {
+		return "", fmt.Errorf("unsupported component type %q", opts.Kind)
+	}
+	if kind == "component" {
+		kind = ""
+	}
+	if kind == "function" {
+		if _, err := os.Stat(filepath.Join(opts.Root, "functions", opts.Name, "cnips.fn.yaml")); err != nil {
+			return "", fmt.Errorf("function %q not found locally", opts.Name)
+		}
+	} else if _, found := artifact.LocalComponentDirKindVersion(opts.Root, opts.Name, kind, ""); !found {
+		return "", fmt.Errorf("%s %q not found locally", firstNonEmptyRuntime(kind, "component"), opts.Name)
+	}
+	uses := opts.Name + "@latest"
+	if kind != "" {
+		uses = kind + "/" + opts.Name + "@latest"
+	}
+	step := &artifact.Step{ID: opts.Name, Uses: uses}
+	runOpts := RunOptions{Root: opts.Root, Payload: opts.Payload, Environment: opts.Environment, LogWriter: opts.LogWriter, Progress: opts.Progress}
+	mgr := fnrunner.NewManagerWithLogs(opts.LogWriter)
+	defer mgr.StopAll()
+	output, _, _, err := executeStep(step, opts.Payload, map[string]string{"_payload": opts.Payload}, envVars, opts.Root, runOpts, mgr, &StepTrace{ID: opts.Name, Uses: uses})
+	if err != nil {
+		return "", fmt.Errorf("run %s %q: %w", firstNonEmptyRuntime(kind, "component"), opts.Name, err)
+	}
+	return output, nil
+}
+
+func firstNonEmptyRuntime(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // StepTrace holds execution data for one step.
 type StepTrace struct {
 	ID         string          `json:"id"`
@@ -55,7 +119,7 @@ type StepTrace struct {
 	Children   []StepTrace     `json:"children,omitempty"`
 }
 
-// Trace is the full run record written to .cnips/traces/run_<id>.json.
+// Trace is the full run record written to the per-project trace directory.
 type Trace struct {
 	RunID      string      `json:"runId"`
 	Pipeline   string      `json:"pipeline"`
@@ -887,7 +951,7 @@ func executeFunction(
 		_ = builder.SaveDigest(opts.Root, fnName, fnDir)
 	} else {
 		// reconstruct result from cache
-		outDir := filepath.Join(opts.Root, ".cnips", "cache", "artifacts", fnName)
+		outDir := filepath.Join(project.ArtifactCacheDir(opts.Root), fnName)
 		build = inferBuildResult(fnName, fnDir, outDir)
 	}
 
@@ -921,7 +985,7 @@ func executeLocalComponent(
 		}
 		_ = builder.SaveDigest(opts.Root, buildName, compDir)
 	} else {
-		outDir := filepath.Join(opts.Root, ".cnips", "cache", "artifacts", buildName)
+		outDir := filepath.Join(project.ArtifactCacheDir(opts.Root), buildName)
 		build = inferBuildResult(buildName, compDir, outDir)
 	}
 
@@ -967,7 +1031,7 @@ func executeSource(
 		}
 		_ = builder.SaveDigest(opts.Root, buildName, compDir)
 	} else {
-		outDir := filepath.Join(opts.Root, ".cnips", "cache", "artifacts", buildName)
+		outDir := filepath.Join(project.ArtifactCacheDir(opts.Root), buildName)
 		build = inferBuildResult(buildName, compDir, outDir)
 	}
 	if build.Language == "javascript" && build.RunnerScript == "" && !builder.JSUsesDirectServer(compDir) {

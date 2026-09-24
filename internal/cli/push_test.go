@@ -541,3 +541,24 @@ func testToken(claims map[string]any) string {
 	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
 	return header + "." + payload + ".sig"
 }
+
+func TestValidateBundleDirectoryNamesRejectsMismatch(t *testing.T) {
+	bundle := &localBundle{Transformations: []localComponent{{
+		Slug: "directory-name", BaseDir: "transformations",
+		Artifact: artifact.Component{Metadata: artifact.ObjectMeta{Name: "different-name"}},
+	}}}
+	if err := validateBundleDirectoryNames(bundle); err == nil {
+		t.Fatal("expected metadata/directory mismatch")
+	}
+}
+
+func TestFilterSinglePushChanges(t *testing.T) {
+	changes := []fileChange{{Path: "transformations/normalize/component.yaml"}, {Path: "sources/orders/component.yaml"}}
+	got, err := filterSinglePushChanges(changes, "transformation", "normalize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Path != changes[0].Path {
+		t.Fatalf("filtered changes = %#v", got)
+	}
+}

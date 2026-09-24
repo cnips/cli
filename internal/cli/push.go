@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,15 +15,17 @@ import (
 	"github.com/cnips/cli/internal/project"
 	"github.com/cnips/cli/internal/serializer"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var pushCmd = &cobra.Command{
-	Use:   "push",
+	Use:   "push [type name]",
 	Short: "Apply local cnips files to a workspace",
 	Long: `Applies the local canonical project files to a target cnips workspace.
 
 This is a dev-loop command. It creates or updates workspace artifacts through
 mgmt-srv and then applies pipelines after component IDs have been resolved.`,
+	Args: cobra.MaximumNArgs(2),
 	RunE: runPush,
 }
 
@@ -35,7 +38,17 @@ func init() {
 	rootCmd.AddCommand(pushCmd)
 }
 
-func runPush(cmd *cobra.Command, _ []string) error {
+func runPush(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("component name is mandatory when a push type is provided")
+		}
+		name := prompt(bufio.NewReader(os.Stdin), "Component name (mandatory)", "")
+		if name == "" {
+			return fmt.Errorf("component name is mandatory when a push type is provided")
+		}
+		args = append(args, name)
+	}
 	root := project.MustFindRoot()
 	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
 	if err != nil {
@@ -54,6 +67,11 @@ func runPush(cmd *cobra.Command, _ []string) error {
 	comparison, err := compareLocalBaseRemote(root, client, workspace, manifest)
 	if err != nil {
 		return err
+	}
+	if len(args) == 2 {
+		if err := scopePushComparison(comparison, args[0], args[1]); err != nil {
+			return err
+		}
 	}
 	if len(comparison.Conflicts) > 0 {
 		fmt.Printf("Push stopped: cnips has changes not present locally for workspace=%s\n", workspace)
@@ -88,6 +106,11 @@ func runPush(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return err
 		}
+		if len(args) == 2 {
+			if err := scopePushComparison(comparison, args[0], args[1]); err != nil {
+				return err
+			}
+		}
 		if len(comparison.Conflicts) > 0 || len(remoteAdvancingChanges(comparison)) > 0 {
 			fmt.Printf("Push stopped after fast-forward because cnips is still ahead for workspace=%s\n", workspace)
 			fmt.Printf("  cnips-only: %d\n", len(comparison.RemoteOnly))
@@ -119,6 +142,9 @@ func runPush(cmd *cobra.Command, _ []string) error {
 
 	bundle, err := readLocalBundle(root, workspace)
 	if err != nil {
+		return err
+	}
+	if err := validateBundleDirectoryNames(bundle); err != nil {
 		return err
 	}
 	indexLocalBundleAliases(state, bundle)
@@ -153,6 +179,73 @@ func runPush(cmd *cobra.Command, _ []string) error {
 	fmt.Printf("  created: %d\n", applied.created)
 	fmt.Printf("  updated: %d\n", applied.updated)
 	fmt.Printf("  unchanged/skipped: %d\n", applied.skipped)
+	return nil
+}
+
+func validateBundleDirectoryNames(bundle *localBundle) error {
+	if bundle == nil {
+		return nil
+	}
+	components := append([]localComponent{}, bundle.Transformations...)
+	components = append(components, bundle.Sources...)
+	components = append(components, bundle.Destinations...)
+	components = append(components, bundle.Apps...)
+	for _, item := range components {
+		if name := strings.TrimSpace(item.Artifact.Metadata.Name); name != item.Slug {
+			return fmt.Errorf("%s/%s: metadata.name %q must exactly match directory name %q", item.BaseDir, item.Slug, name, item.Slug)
+		}
+	}
+	for _, item := range bundle.Functions {
+		if name := strings.TrimSpace(item.Artifact.Metadata.Name); name != item.Slug {
+			return fmt.Errorf("functions/%s: metadata.name %q must exactly match directory name %q", item.Slug, name, item.Slug)
+		}
+	}
+	for _, item := range bundle.Pipelines {
+		name := strings.TrimSpace(item.Metadata.Name)
+		if name == "" {
+			return fmt.Errorf("pipeline metadata.name is required")
+		}
+	}
+	return nil
+}
+
+func filterSinglePushChanges(changes []fileChange, rawKind, rawName string) ([]fileChange, error) {
+	kind := strings.ToLower(strings.TrimSpace(rawKind))
+	name := strings.Trim(strings.TrimSpace(rawName), "/")
+	dirs := map[string]string{
+		"transformation": "transformations", "approval": "approvals", "switch": "switches", "decision": "decisions",
+		"source": "sources", "destination": "destinations", "component": "components", "function": "functions", "pipeline": "pipelines",
+		"globalvariable": "globalvariables", "configuration": "configurations",
+	}
+	dir, ok := dirs[kind]
+	if !ok || name == "" {
+		return nil, fmt.Errorf("unsupported push target %q; use transformation, approval, switch, decision, source, destination, component, function, pipeline, globalvariable, or configuration", rawKind)
+	}
+	prefix := dir + "/" + name
+	if kind == "globalvariable" || kind == "configuration" {
+		prefix += ".yaml"
+	}
+	var out []fileChange
+	for _, change := range changes {
+		if change.Path == prefix || strings.HasPrefix(change.Path, prefix+"/") {
+			out = append(out, change)
+		}
+	}
+	return out, nil
+}
+
+func scopePushComparison(comparison *syncComparison, kind, name string) error {
+	if comparison == nil {
+		return nil
+	}
+	var err error
+	if comparison.All, err = filterSinglePushChanges(comparison.All, kind, name); err != nil {
+		return err
+	}
+	comparison.LocalOnly, _ = filterSinglePushChanges(comparison.LocalOnly, kind, name)
+	comparison.RemoteOnly, _ = filterSinglePushChanges(comparison.RemoteOnly, kind, name)
+	comparison.Conflicts, _ = filterSinglePushChanges(comparison.Conflicts, kind, name)
+	comparison.AutoMerged, _ = filterSinglePushChanges(comparison.AutoMerged, kind, name)
 	return nil
 }
 
@@ -450,7 +543,8 @@ func resolveAuthenticatedPlatformFlags(cmd *cobra.Command) (apiURL, workspace, t
 
 	hasLoggedOutProfile := false
 	if cfg, err := auth.Load(); err == nil {
-		if profile, ok := cfg.Current(); ok {
+		cwd, _ := os.Getwd()
+		if profile, ok := cfg.CurrentForDirectory(cwd); ok {
 			hasLoggedOutProfile = profile.Token == ""
 			if !cmd.Flags().Changed("api-url") && profile.APIURL != "" {
 				apiURL = profile.APIURL

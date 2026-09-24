@@ -88,6 +88,36 @@ func TestAppsAreIgnoredByComparableFiles(t *testing.T) {
 	}
 }
 
+func TestGeneratedExecutionArtifactsAreIgnoredByComparableFiles(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "pipelines/orders/pipeline.yaml", "kind: Pipeline\n")
+	writeTestFile(t, root, "pipelines/orders/execution-abc123/run_c754d519.json", `{"trace":true}`)
+	writeTestFile(t, root, "pipelines/orders/execution-abc123/execution-abc123.log", "started\n")
+	writeTestFile(t, root, "functions/enrich/cnips.fn.yaml", "kind: Function\n")
+	writeTestFile(t, root, "functions/enrich/execution-def456/run.log", "started\n")
+	writeTestFile(t, root, "pipelines/execution-real-pipeline/pipeline.yaml", "kind: Pipeline\n")
+
+	files, err := collectComparableFiles(root)
+	if err != nil {
+		t.Fatalf("collectComparableFiles: %v", err)
+	}
+	if _, ok := files["pipelines/orders/execution-abc123/run_c754d519.json"]; ok {
+		t.Fatalf("pipeline execution trace should not be tracked: %#v", files)
+	}
+	if _, ok := files["pipelines/orders/execution-abc123/execution-abc123.log"]; ok {
+		t.Fatalf("pipeline execution log should not be tracked: %#v", files)
+	}
+	if _, ok := files["functions/enrich/execution-def456/run.log"]; ok {
+		t.Fatalf("function execution log should not be tracked: %#v", files)
+	}
+	if _, ok := files["pipelines/orders/pipeline.yaml"]; !ok {
+		t.Fatalf("pipeline manifest should still be tracked: %#v", files)
+	}
+	if _, ok := files["pipelines/execution-real-pipeline/pipeline.yaml"]; !ok {
+		t.Fatalf("pipeline slug with execution prefix should still be tracked: %#v", files)
+	}
+}
+
 func TestManifestFingerprintIsStableAndContentSensitive(t *testing.T) {
 	left := map[string]manifestFile{
 		"b.yaml": {Digest: "2"},
@@ -135,12 +165,13 @@ func TestLocalPullManifestDropsLegacyAppEntries(t *testing.T) {
 		LocalHead:  "sha256:local",
 		RemoteHead: "sha256:remote",
 		Files: map[string]manifestFile{
-			"apps/send-mail/component.yaml":      {Digest: "app"},
-			"pipelines/orders/pipeline.yaml":     {Digest: "pipe"},
-			"transformations/normalize/main.go":  {Digest: "tx"},
-			"transformations/normalize/go.mod":   {Digest: "mod"},
-			"transformations/normalize/go.sum":   {Digest: "sum"},
-			"transformations/normalize/notes.md": {Digest: "ignored"},
+			"apps/send-mail/component.yaml":                       {Digest: "app"},
+			"pipelines/orders/execution-abc123/run_c754d519.json": {Digest: "execution"},
+			"pipelines/orders/pipeline.yaml":                      {Digest: "pipe"},
+			"transformations/normalize/main.go":                   {Digest: "tx"},
+			"transformations/normalize/go.mod":                    {Digest: "mod"},
+			"transformations/normalize/go.sum":                    {Digest: "sum"},
+			"transformations/normalize/notes.md":                  {Digest: "ignored"},
 		},
 	}
 	if err := writeLocalPullManifest(root, "workspace/a", manifest); err != nil {
@@ -152,6 +183,9 @@ func TestLocalPullManifestDropsLegacyAppEntries(t *testing.T) {
 	}
 	if _, ok := got.Files["apps/send-mail/component.yaml"]; ok {
 		t.Fatalf("legacy app entry should be dropped: %#v", got.Files)
+	}
+	if _, ok := got.Files["pipelines/orders/execution-abc123/run_c754d519.json"]; ok {
+		t.Fatalf("legacy execution entry should be dropped: %#v", got.Files)
 	}
 	if got.BaseHead == "sha256:base" || got.LocalHead == "sha256:local" || got.RemoteHead == "sha256:remote" {
 		t.Fatalf("heads should be recalculated after dropping app entries: %#v", got)

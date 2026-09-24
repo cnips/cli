@@ -7,6 +7,7 @@ import (
 
 	"github.com/cnips/cli/internal/auth"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var rootCmd = &cobra.Command{
@@ -41,10 +42,39 @@ Run 'cnips <command> --help' for more information.`,
 	PersistentPreRunE: requireTokenForCommand,
 }
 
+func init() {
+	defaultHelp := rootCmd.HelpFunc()
+	defaultUsage := rootCmd.UsageFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		labelFlagRequirements(cmd)
+		defaultHelp(cmd, args)
+	})
+	rootCmd.SetUsageFunc(func(cmd *cobra.Command) error {
+		labelFlagRequirements(cmd)
+		return defaultUsage(cmd)
+	})
+}
+
+func labelFlagRequirements(cmd *cobra.Command) {
+	for current := cmd; current != nil; current = current.Parent() {
+		current.LocalNonPersistentFlags().VisitAll(func(flag *pflag.Flag) {
+			if strings.HasPrefix(flag.Usage, "[mandatory]") || strings.HasPrefix(flag.Usage, "[optional]") || strings.HasPrefix(flag.Usage, "[one required]") {
+				return
+			}
+			label := "[optional] "
+			if flag.Annotations != nil && len(flag.Annotations["cnips_mandatory"]) > 0 {
+				label = "[mandatory] "
+			} else if flag.Annotations != nil && len(flag.Annotations["cnips_one_required"]) > 0 {
+				label = "[one required] "
+			}
+			flag.Usage = label + flag.Usage
+		})
+	}
+}
+
 // Execute is the entry point called by main.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -60,7 +90,8 @@ func requireTokenForCommand(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	profile, ok := cfg.Current()
+	cwd, _ := os.Getwd()
+	profile, ok := cfg.CurrentForDirectory(cwd)
 	if !ok || strings.TrimSpace(profile.Token) == "" {
 		return fmt.Errorf("not logged in; run cnips login first")
 	}

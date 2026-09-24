@@ -18,6 +18,7 @@ import (
 var validateOpts struct {
 	Workspace   string
 	AllowLatest bool
+	Type        string
 }
 
 var validateCmd = &cobra.Command{
@@ -36,6 +37,7 @@ Checks performed:
 func init() {
 	validateCmd.Flags().StringVar(&validateOpts.Workspace, "workspace", "default", "Workspace ID whose local base manifest should be used")
 	validateCmd.Flags().BoolVar(&validateOpts.AllowLatest, "allow-latest", false, "Accepted for compatibility; latest references are allowed")
+	validateCmd.Flags().StringVarP(&validateOpts.Type, "type", "t", "", "Optional component type to validate")
 	rootCmd.AddCommand(validateCmd)
 }
 
@@ -71,17 +73,31 @@ func runValidate(cmd *cobra.Command, _ []string) error {
 	root := project.MustFindRoot()
 	workspace, _ := cmd.Flags().GetString("workspace")
 	report := &validationReport{}
+	selectedType, err := normalizeValidationType(validateOpts.Type)
+	if err != nil {
+		return err
+	}
 
-	tasks := []func() error{
-		func() error { validateProjectManifest(root, report); return nil },
-		func() error { validatePipelines(root, report); return nil },
-		func() error { validateFunctions(root, report); return nil },
-		func() error { validateComponents(root, report); return nil },
-		func() error { validateWorkspaceFiles(root, workspace, report); return nil },
-		func() error { validateLocalReferences(root, validateOpts.AllowLatest, report); return nil },
-		func() error { validateSecretLeaks(root, report); return nil },
-		func() error { validateEnvironments(root, report); return nil },
-		func() error { validateLockFile(root, report); return nil },
+	tasks := []func() error{func() error { validateProjectManifest(root, report); return nil }}
+	if selectedType == "" || selectedType == "pipeline" {
+		tasks = append(tasks, func() error { validatePipelines(root, report); return nil })
+	}
+	if selectedType == "" || selectedType == "function" {
+		tasks = append(tasks, func() error { validateFunctions(root, report); return nil })
+	}
+	if selectedType == "" || validationComponentType(selectedType) {
+		tasks = append(tasks, func() error { validateComponents(root, selectedType, report); return nil })
+	}
+	if selectedType == "" || selectedType == "globalvariable" || selectedType == "configuration" {
+		tasks = append(tasks, func() error { validateWorkspaceFiles(root, workspace, report); return nil })
+	}
+	if selectedType == "" {
+		tasks = append(tasks,
+			func() error { validateLocalReferences(root, validateOpts.AllowLatest, report); return nil },
+			func() error { validateSecretLeaks(root, report); return nil },
+			func() error { validateEnvironments(root, report); return nil },
+			func() error { validateLockFile(root, report); return nil },
+		)
 	}
 	if err := runConcurrent(tasks...); err != nil {
 		return err
@@ -134,6 +150,9 @@ func validatePipelines(root string, report *validationReport) {
 				report.Errorf("pipelines/%s/pipeline.yaml: %v", entry.Name(), err)
 				return nil
 			}
+			if p.Metadata.Name != entry.Name() {
+				report.Errorf("pipelines/%s: metadata.name %q must exactly match directory name %q", entry.Name(), p.Metadata.Name, entry.Name())
+			}
 			for _, validationErr := range validatePipeline(p) {
 				report.Errorf("%s", validationErr)
 			}
@@ -156,6 +175,9 @@ func validateFunctions(root string, report *validationReport) {
 			if fn.Artifact.Spec.Runtime == "" {
 				report.Errorf("functions/%s: spec.runtime is required", fn.Slug)
 			}
+			if fn.Artifact.Metadata.Name != fn.Slug {
+				report.Errorf("functions/%s: metadata.name %q must exactly match directory name %q", fn.Slug, fn.Artifact.Metadata.Name, fn.Slug)
+			}
 			if _, err := normalizeFunctionMethod(fn.Artifact.Spec.Method()); err != nil {
 				report.Errorf("functions/%s: spec.type must be GET, POST, PUT, or DELETE", fn.Slug)
 			}
@@ -165,9 +187,12 @@ func validateFunctions(root string, report *validationReport) {
 	_ = runConcurrent(tasks...)
 }
 
-func validateComponents(root string, report *validationReport) {
+func validateComponents(root, selectedType string, report *validationReport) {
 	var tasks []func() error
 	for _, base := range localComponentBases {
+		if selectedType != "" && selectedType != base.kind {
+			continue
+		}
 		base := base
 		tasks = append(tasks, func() error {
 			items, err := readValidationComponents(root, base.dir)
@@ -182,11 +207,35 @@ func validateComponents(root string, report *validationReport) {
 				if item.Artifact.Spec.Language == "" && componentRequiresLanguage(base.dir, item) {
 					report.Errorf("%s: spec.language is required", relPath(root, item.Dir))
 				}
+				if item.Artifact.Metadata.Name != item.Slug {
+					report.Errorf("%s/%s: metadata.name %q must exactly match directory name %q", base.dir, item.Slug, item.Artifact.Metadata.Name, item.Slug)
+				}
 			}
 			return nil
 		})
 	}
 	_ = runConcurrent(tasks...)
+}
+
+func normalizeValidationType(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+	supported := map[string]bool{"pipeline": true, "function": true, "component": true, "source": true, "destination": true, "transformation": true, "approval": true, "switch": true, "decision": true, "globalvariable": true, "configuration": true}
+	if !supported[value] {
+		return "", fmt.Errorf("unsupported --type %q", value)
+	}
+	return value, nil
+}
+
+func validationComponentType(value string) bool {
+	switch value {
+	case "component", "source", "destination", "transformation", "approval", "switch", "decision":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateWorkspaceFiles(root, workspace string, report *validationReport) {

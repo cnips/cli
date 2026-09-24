@@ -44,6 +44,14 @@ func init() {
 }
 
 func runPull(cmd *cobra.Command, _ []string) error {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if dryRun {
+		return runPullInternal(cmd)
+	}
+	return runWithLoader("Pulling", false, func() error { return runPullInternal(cmd) })
+}
+
+func runPullInternal(cmd *cobra.Command) error {
 	root := project.MustFindRoot()
 
 	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)

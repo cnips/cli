@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/cnips/cli/internal/platform"
 	"github.com/cnips/cli/internal/project"
@@ -23,7 +24,7 @@ Supported types: transformation, destination, switch, approval, decision.
 The component must already exist in the target workspace and have a successful
 platform build, because marketplace publish copies the built artifact from the
 tenant bucket.`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.MaximumNArgs(2),
 	RunE: runPublish,
 }
 
@@ -44,8 +45,23 @@ func init() {
 }
 
 func runPublish(cmd *cobra.Command, args []string) error {
-	_ = project.MustFindRoot()
-	kind, name := normalizePublishKind(args[0]), strings.TrimSpace(args[1])
+	root := project.MustFindRoot()
+	if len(args) == 0 {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("publish type and name are mandatory")
+		}
+		options := []string{"transformation", "destination", "switch", "approval", "decision"}
+		selected := interactiveSelect("Select component type (mandatory)", options)
+		if selected < 0 {
+			return fmt.Errorf("publish cancelled")
+		}
+		args = append(args, options[selected])
+	}
+	kind := normalizePublishKind(args[0])
+	name := ""
+	if len(args) > 1 {
+		name = strings.TrimSpace(args[1])
+	}
 	if kind == "" {
 		return fmt.Errorf("unsupported publish type %q; use transformation, destination, switch, approval, or decision", args[0])
 	}
@@ -69,9 +85,32 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if name == "" {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("component name is mandatory")
+		}
+		options := publishTargetNames(state, kind)
+		if len(options) == 0 {
+			return fmt.Errorf("no %s components found in workspace %q", kind, workspace)
+		}
+		selected := interactiveSelect("Select component to publish", options)
+		if selected < 0 {
+			return fmt.Errorf("publish cancelled")
+		}
+		name = options[selected]
+	}
 	target, err := resolvePublishTarget(state, kind, name)
 	if err != nil {
-		return err
+		target, err = resolveLocalPublishTarget(root, kind, name)
+		if err != nil {
+			// Some deployments do not return every component in the paginated
+			// list. Try the detail endpoint with the supplied name as a final,
+			// deterministic lookup before reporting it missing.
+			target = publishTarget{id: name, name: name, componentType: strings.ToUpper(kind), versionType: strings.ToUpper(kind)}
+			if kind == "destination" {
+				target.componentType, target.versionType = "DESTINATION", "DESTINATION"
+			}
+		}
 	}
 	target, err = hydratePublishTarget(mgmt, workspace, target)
 	if err != nil {
@@ -127,6 +166,56 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return waitForPublishUpload(marketplace, requestID)
+}
+
+func publishTargetNames(state *workspaceState, kind string) []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(id, name string) {
+		key := firstNonEmpty(id, name)
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		names = append(names, firstNonEmpty(name, id))
+	}
+	if kind == "destination" {
+		for _, item := range state.Destinations {
+			add(item.ID, item.Name)
+		}
+	} else {
+		for _, item := range state.Transformations {
+			itemType := strings.ToLower(firstNonEmpty(item.Type, "transformation"))
+			if itemType == kind {
+				add(item.ID, item.Name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func resolveLocalPublishTarget(root, kind, name string) (publishTarget, error) {
+	base := transformationFamilyBaseDir(kind)
+	if kind == "destination" {
+		base = "destinations"
+	}
+	items, err := readLocalComponents(root, base)
+	if err != nil {
+		return publishTarget{}, err
+	}
+	for _, item := range items {
+		if !strings.EqualFold(item.Slug, name) && !strings.EqualFold(item.Artifact.Metadata.Name, name) && !strings.EqualFold(item.Artifact.Metadata.Slug, name) {
+			continue
+		}
+		id := strings.TrimSpace(item.Artifact.Metadata.ID)
+		if id == "" {
+			id = name
+		}
+		componentType := strings.ToUpper(kind)
+		return publishTarget{id: id, name: firstNonEmpty(item.Artifact.Metadata.Name, name), description: firstNonEmpty(item.Artifact.Metadata.Description, item.Artifact.Spec.Description), componentType: componentType, versionType: componentType}, nil
+	}
+	return publishTarget{}, fmt.Errorf("%s %q not found locally", kind, name)
 }
 
 func resolveMarketplaceTenantKey(cmd *cobra.Command, marketplaceURL, tenantKey string) string {

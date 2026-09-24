@@ -220,6 +220,13 @@ func collectComparableFiles(root string) (map[string]string, error) {
 				if d.Name() == ".cnips" || d.Name() == "node_modules" || d.Name() == ".git" {
 					return filepath.SkipDir
 				}
+				relPath, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				if isGeneratedExecutionDir(filepath.ToSlash(relPath)) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			if !isComparableFile(path) {
