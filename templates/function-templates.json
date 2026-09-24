@@ -1,0 +1,60 @@
+[
+    {
+        "name": "Http",
+        "version": "V1",
+        "type": "Http",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/zinscky/log\"\n)\n\nfunc HandleRequest(w http.ResponseWriter, r *http.Request) {\n\tLOG := log.NewLogger(r, log.Info)\n\tLOG.Info(\"Request ID: %s\", r.Header.Get(\"X-Request-ID\"))\n\tw.Write([]byte(\"hello world\"))\n}\n",
+            "mod": "module function\n\ngo 1.24\n\nrequire github.com/zinscky/log v1.2.1\n\nrequire (\n\tgithub.com/andybalholm/brotli v1.1.0 // indirect\n\tgithub.com/gofiber/fiber/v2 v2.52.6 // indirect\n\tgithub.com/google/uuid v1.6.0 // indirect\n\tgithub.com/klauspost/compress v1.17.9 // indirect\n\tgithub.com/mattn/go-colorable v0.1.13 // indirect\n\tgithub.com/mattn/go-isatty v0.0.20 // indirect\n\tgithub.com/mattn/go-runewidth v0.0.16 // indirect\n\tgithub.com/rivo/uniseg v0.2.0 // indirect\n\tgithub.com/valyala/bytebufferpool v1.0.0 // indirect\n\tgithub.com/valyala/fasthttp v1.51.0 // indirect\n\tgithub.com/valyala/tcplisten v1.0.0 // indirect\n\tgolang.org/x/sys v0.28.0 // indirect\n)\n"
+        }
+    },
+    {
+        "name": "Fiber",
+        "version": "V2",
+        "type": "Fiber",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"github.com/gofiber/fiber/v2\"\n\t\"github.com/zinscky/log\"\n)\n\nfunc HandleRequest(ctx *fiber.Ctx) error {\n\tLOG := log.NewLogger(ctx, log.Debug)\n\tLOG.Info(\"Request ID: %s\", ctx.Get(\"X-Request-ID\"))\n\treturn ctx.SendString(\"Hello, World!\")\n}\n",
+            "mod": "module function\n\ngo 1.24\n\nrequire (\n\tgithub.com/gofiber/fiber/v2 v2.52.6\n\tgithub.com/zinscky/log v1.2.1\n)\n\nrequire (\n\tgithub.com/andybalholm/brotli v1.1.0 // indirect\n\tgithub.com/google/uuid v1.6.0 // indirect\n\tgithub.com/klauspost/compress v1.17.9 // indirect\n\tgithub.com/mattn/go-colorable v0.1.13 // indirect\n\tgithub.com/mattn/go-isatty v0.0.20 // indirect\n\tgithub.com/mattn/go-runewidth v0.0.16 // indirect\n\tgithub.com/rivo/uniseg v0.2.0 // indirect\n\tgithub.com/valyala/bytebufferpool v1.0.0 // indirect\n\tgithub.com/valyala/fasthttp v1.51.0 // indirect\n\tgithub.com/valyala/tcplisten v1.0.0 // indirect\n\tgolang.org/x/sys v0.28.0 // indirect\n)\n"
+        }
+    },
+    {
+        "id": "express-v1",
+        "name": "Express",
+        "version": "V1",
+        "type": "Express",
+        "language": "javascript",
+        "script": "module.exports = function (req, res, config) {\n    // log request\n    console.log(req.headers)\n    console.log(req.body)\n\n    //add you api logic here ...\n    // write a greeting function returning the users name\n    //remember to return the response\n    return res.json({message: \"hello world.\"});\n}"
+    },
+    {
+        "id": "express-v2",
+        "name": "Express",
+        "version": "V2",
+        "type": "Express",
+        "language": "javascript",
+        "script": "const { logger, levels } = require(\"@cnips/log\");\n\nconst LOG = logger(process.env.APP || \"default\", levels.info)\n\n/**\n * Your expressjs handler function.\n * @param {Request} req \n * @param {Response} res \n * @returns \n */\nasync function handleRequest(req, res) {\n    try {\n        // log request\n        LOG.info(`Received request headers: ${JSON.stringify(req.headers)}`);\n        LOG.info(`Received request body: ${JSON.stringify(req.body)}`);\n\n        // access defined config for this function from the request headers\n        let client_id = req.headers[\"client_id\"];\n        if (!client_id) {\n            LOG.error(\"Client ID is missing in the request headers\");\n            return res.status(400).json({ error: \"Client ID is required\" });\n        }\n\n        // Your business logic here\n\n        // return response\n        return res.json({ data: \"pong\" })\n\n    } catch (error) {\n        LOG.error(`Error processing request: ${error.message}`);\n        return res.status(500).json({ error: \"Internal Server Error\" });\n    }\n}"
+    },
+    {
+        "id": "express-v3",
+        "name": "Express",
+        "version": "V3",
+        "type": "Express",
+        "language": "javascript",
+        "script": "import { logger, levels } from \"@cnips/log\";\n\nconst LOG = logger(process.env.APP || \"default\", levels.info)\n\n/**\n * Your expressjs handler function.\n * @param {Request} req \n * @param {Response} res \n * @returns \n */\nasync function handleRequest(req, res) {\n    try {\n        // log request\n        LOG.info(`Received request headers: ${JSON.stringify(req.headers)}`);\n        LOG.info(`Received request body: ${JSON.stringify(req.body)}`);\n\n        // access defined config for this function from the request headers\n        let client_id = req.headers[\"client_id\"];\n        if (!client_id) {\n            LOG.error(\"Client ID is missing in the request headers\");\n            return res.status(400).json({ error: \"Client ID is required\" });\n        }\n\n        // Your business logic here\n\n        // return response\n        return res.json({ data: \"pong\" })\n\n    } catch (error) {\n        LOG.error(`Error processing request: ${error.message}`);\n        return res.status(500).json({ error: \"Internal Server Error\" });\n    }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-fn\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/express\": \"^5.0.3\",\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/log\": \"^1.0.0\",\n    \"express\": \"^5.1.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "id": "python-v1",
+        "name": "Python",
+        "version": "V1",
+        "type": "Python",
+        "language": "python",
+        "python": {
+            "main": "\n@execute\ndef func (self):\n    return {\"message\": \"Hello, World!\"}\n\n\nif __name__ == \"__main__\":\n    func()\n",
+            "requirements": ""
+        }
+    }
+]

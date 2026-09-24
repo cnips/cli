@@ -6,16 +6,18 @@ import (
 	"testing"
 
 	"github.com/cnips/cli/internal/auth"
+	"github.com/cnips/cli/internal/project"
 )
 
 func TestDiscardProjectRootResetsArtifactsAndState(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("CNIPS_DATA_DIR", t.TempDir())
 	writeTestFile(t, root, "cnips.yaml", "apiVersion: cnips.io/v1\nkind: Project\nmetadata:\n  name: test\n")
 	writeTestFile(t, root, "cnips.lock", "old: lock\n")
 	writeTestFile(t, root, "pipelines/orders/pipeline.yaml", "kind: Pipeline\n")
 	writeTestFile(t, root, "transformations/normalize/component.yaml", "kind: Component\n")
 	writeTestFile(t, root, "globalvariables/api-key.yaml", "kind: GlobalVariable\n")
-	writeTestFile(t, root, ".cnips/state/workspaces/ws/base-manifest.json", "{}\n")
+	writeTestFile(t, project.DataDir(root), "state/workspaces/ws/base-manifest.json", "{}\n")
 	writeTestFile(t, root, "environments/dev.yaml", "keep: me\n")
 	writeTestFile(t, root, "README.md", "keep me\n")
 
@@ -27,7 +29,6 @@ func TestDiscardProjectRootResetsArtifactsAndState(t *testing.T) {
 		"pipelines/orders/pipeline.yaml",
 		"transformations/normalize/component.yaml",
 		"globalvariables/api-key.yaml",
-		".cnips/state/workspaces/ws/base-manifest.json",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); !os.IsNotExist(err) {
 			t.Fatalf("%s still exists after discard", rel)
@@ -40,12 +41,18 @@ func TestDiscardProjectRootResetsArtifactsAndState(t *testing.T) {
 		"README.md",
 		"pipelines",
 		"transformations",
-		".cnips/state",
-		".cnips/cache/artifacts",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("%s missing after discard: %v", rel, err)
 		}
+	}
+	for _, path := range []string{project.StateDir(root), project.ArtifactCacheDir(root)} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("runtime directory missing after discard: %v", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".cnips")); !os.IsNotExist(err) {
+		t.Fatalf("legacy .cnips directory should not be recreated")
 	}
 	lock, err := os.ReadFile(filepath.Join(root, "cnips.lock"))
 	if err != nil {
@@ -58,6 +65,7 @@ func TestDiscardProjectRootResetsArtifactsAndState(t *testing.T) {
 
 func TestRunDiscardRemovesSavedConfig(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("CNIPS_DATA_DIR", t.TempDir())
 	writeTestFile(t, root, "cnips.yaml", "apiVersion: cnips.io/v1\nkind: Project\nmetadata:\n  name: test\n")
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("CNIPS_CONFIG", configPath)

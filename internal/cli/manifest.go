@@ -14,6 +14,7 @@ import (
 
 	"github.com/cnips/cli/internal/artifact"
 	"github.com/cnips/cli/internal/platform"
+	"github.com/cnips/cli/internal/project"
 )
 
 type pullManifest struct {
@@ -282,7 +283,7 @@ func timeNowRFC3339() string {
 }
 
 func localPullManifestPath(root, workspace string) string {
-	return filepath.Join(root, ".cnips", "state", "workspaces", safeStateName(workspace), "base-manifest.json")
+	return filepath.Join(project.ManifestDir(root), "workspaces", safeStateName(workspace), "base-manifest.json")
 }
 
 func safeStateName(value string) string {
@@ -352,7 +353,21 @@ func dropIgnoredManifestFiles(files map[string]manifestFile) bool {
 }
 
 func ignoredManifestPath(path string) bool {
-	return strings.HasPrefix(filepath.ToSlash(path), "apps/")
+	path = filepath.ToSlash(path)
+	return strings.HasPrefix(path, "apps/") || isGeneratedExecutionDir(path)
+}
+
+func isGeneratedExecutionDir(path string) bool {
+	parts := strings.Split(strings.Trim(filepath.ToSlash(path), "/"), "/")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, part := range parts[2:] {
+		if strings.HasPrefix(part, "execution-") {
+			return true
+		}
+	}
+	return false
 }
 
 func changesFromManifest(root string, manifest *pullManifest) ([]fileChange, error) {
@@ -593,6 +608,9 @@ func dirIntegrity(dir string) (string, error) {
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", ".cnips", "node_modules", ".venv":
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(d.Name(), "execution-") {
 				return filepath.SkipDir
 			}
 			return nil

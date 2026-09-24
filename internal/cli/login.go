@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,6 +51,8 @@ func init() {
 	loginCmd.Flags().String("auth-path", "/", "OIDC callback path")
 	loginCmd.Flags().Bool("force", false, "Ignore cached browser token and force a fresh login")
 	loginCmd.Flags().Bool("skip-verify", false, "Save credentials without calling GET /workspace")
+	loginCmd.Flags().Lookup("base-url").Annotations = map[string][]string{"cnips_one_required": {"true"}}
+	loginCmd.Flags().Lookup("token").Annotations = map[string][]string{"cnips_one_required": {"true"}}
 	rootCmd.AddCommand(loginCmd)
 }
 
@@ -68,9 +71,16 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	authPath, _ := cmd.Flags().GetString("auth-path")
 	force, _ := cmd.Flags().GetBool("force")
 	skipVerify, _ := cmd.Flags().GetBool("skip-verify")
+	hasBaseURL := cmd.Flags().Changed("base-url") && strings.TrimSpace(baseURL) != ""
 
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	apiURL = strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	if baseURL != "" && !strings.Contains(baseURL, "://") {
+		baseURL = "https://" + baseURL
+	}
+	if cmd.Flags().Changed("api-url") && apiURL != "" && !strings.Contains(apiURL, "://") {
+		apiURL = "https://" + apiURL
+	}
 	tenantKey = strings.TrimSpace(tenantKey)
 	token = normalizeToken(strings.TrimSpace(token))
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -96,7 +106,11 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	existingProfile, hasExistingProfile := cfg.Profiles[profileName]
+	loginDirectory := currentLoginDirectory()
+	existingProfile, hasExistingProfile := cfg.CurrentForDirectory(loginDirectory)
+	if hasExistingProfile && existingProfile.Name != profileName && cmd.Flags().Changed("profile") {
+		existingProfile, hasExistingProfile = cfg.Find(profileName)
+	}
 	reuseWorkspace := hasExistingProfile &&
 		existingProfile.WorkspaceID != "" &&
 		existingProfile.Token == "" &&
@@ -105,8 +119,18 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if reuseWorkspace {
 		workspaceID = existingProfile.WorkspaceID
 	}
-	if token == "" && baseURL == "" && !cmd.Flags().Changed("api-url") {
-		return fmt.Errorf("either --base-url (for browser login) or --token (for token login) is required\n\nExamples:\n  cnips login --base-url https://your-cnips-instance.com\n  cnips login --token \"$CNIPS_TOKEN\"")
+	if token == "" && !hasBaseURL {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("invalid command: either --base-url or --token is required")
+		}
+		baseURL = strings.TrimRight(strings.TrimSpace(prompt(reader, "CNIPS base URL (required)", "")), "/")
+		if baseURL == "" {
+			return fmt.Errorf("invalid command: either --base-url or --token is required")
+		}
+		if !strings.Contains(baseURL, "://") {
+			baseURL = "https://" + baseURL
+		}
+		apiURL = auth.APIURLFromOrigin(baseURL)
 	}
 	var tokenMeta *auth.Token
 	if token == "" {
@@ -156,45 +180,61 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	} else if workspaceID == "" {
 		workspaceID = firstNonEmpty(existingProfile.WorkspaceID, "default")
 	}
-	cfg.Upsert(auth.Profile{
-		Name:        profileName,
-		BaseURL:     baseURL,
-		APIURL:      apiURL,
-		TenantKey:   tenantKey,
-		Token:       token,
-		User:        user,
-		WorkspaceID: workspaceID,
-		Workspaces:  mergeLoginWorkspaces(savedWorkspaces, existingProfile.Workspaces),
-	})
+	loginWorkspaces := mergeLoginWorkspaces(savedWorkspaces, existingProfile.Workspaces)
+	profile := auth.Profile{
+		Name:          profileName,
+		UserID:        userSubject(user),
+		BaseURL:       baseURL,
+		APIURL:        apiURL,
+		TenantKey:     tenantKey,
+		Token:         token,
+		User:          user,
+		WorkspaceID:   workspaceID,
+		WorkspaceName: selectedWorkspaceName(loginWorkspaces, workspaceID),
+		Workspaces:    loginWorkspaces,
+	}
 	if tokenMeta != nil {
-		profile := cfg.Profiles[profileName]
 		profile.RefreshToken = tokenMeta.RefreshToken
 		profile.TokenType = tokenMeta.TokenType
 		profile.ExpiresAt = tokenMeta.ExpiresAt
-		cfg.Profiles[profileName] = profile
 	}
+	cfg.UpsertForDirectory(profile, loginDirectory)
 	if err := auth.Save(cfg); err != nil {
 		return err
 	}
-	path, _ := auth.Path()
-
-	fmt.Printf("Logged in to %s\n", apiURL)
-	fmt.Printf("  profile:   %s\n", profileName)
-	if tenantKey != "" {
-		fmt.Printf("  tenant:    %s\n", tenantKey)
-	}
-	fmt.Printf("  workspace: %s\n", workspaceID)
-	if user != nil {
-		fmt.Printf("  user:      %s\n", firstNonEmpty(user.Email, user.Name, user.Subject))
-	}
-	if len(savedWorkspaces) > 0 {
-		fmt.Printf("  access:    %d workspace(s)\n", len(savedWorkspaces))
-	}
-	if reuseWorkspace {
-		fmt.Println("  note:      existing workspace was reused. To switch workspaces, run cnips switch.")
-	}
-	fmt.Printf("  config:    %s\n", path)
+	fmt.Printf("Logged in successfully to %s (workspace %s).\n", apiURL, workspaceID)
 	return nil
+}
+
+func selectedWorkspaceName(workspaces []auth.Workspace, workspaceID string) string {
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID {
+			return firstNonEmpty(workspace.Name, workspace.ID)
+		}
+	}
+	return workspaceID
+}
+
+func userSubject(user *auth.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	return strings.TrimSpace(user.Subject)
+}
+
+func currentLoginDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	if root, err := project.FindRoot(cwd); err == nil {
+		return root
+	}
+	abs, err := filepath.Abs(cwd)
+	if err == nil {
+		return abs
+	}
+	return cwd
 }
 
 func mergeLoginWorkspaces(current, previous []auth.Workspace) []auth.Workspace {

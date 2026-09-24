@@ -18,17 +18,23 @@ var discardCmd = &cobra.Command{
 
 The command removes canonical cnips artifact directories and runtime sync state,
 then recreates the standard empty project folders and cnips.lock. It also
-removes the saved cnips CLI config. It leaves cnips.yaml, environments, .git,
-and unrelated repository files untouched.`,
+It leaves login accounts, cnips.yaml, environments, .git, and unrelated
+repository files untouched.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		root := project.MustFindRoot()
 		if err := discardProjectRoot(root); err != nil {
 			return err
 		}
-		if err := auth.Remove(); err != nil {
-			return err
+		if cfg, err := auth.Load(); err == nil && cfg.RemoveDirectory(root) {
+			if len(cfg.Logins) == 0 {
+				if err := auth.Remove(); err != nil {
+					return err
+				}
+			} else if err := auth.Save(cfg); err != nil {
+				return err
+			}
 		}
-		fmt.Println("Discarded cnips artifacts, reset local sync state, and removed saved cnips config.")
+		fmt.Println("Discarded cnips artifacts and reset this project's local sync state.")
 		return nil
 	},
 }
@@ -48,10 +54,6 @@ var initProjectDirs = []string{
 	"switches",
 	"decisions",
 	"environments",
-	".cnips/cache/artifacts",
-	".cnips/cache/schemas",
-	".cnips/traces",
-	".cnips/state",
 }
 
 var discardArtifactDirs = []string{
@@ -82,14 +84,21 @@ func discardProjectRoot(root string) error {
 			return err
 		}
 	}
-	cnipsDir, err := safeProjectChild(root, ".cnips")
+	if err := project.RemoveData(root); err != nil {
+		return err
+	}
+	// Clean up state created by CLI versions that stored .cnips in the repo.
+	legacyDir, err := safeProjectChild(root, ".cnips")
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(cnipsDir); err != nil {
+	if err := os.RemoveAll(legacyDir); err != nil {
 		return err
 	}
 	if err := ensureInitProjectDirs(root); err != nil {
+		return err
+	}
+	if err := project.EnsureDirs(root); err != nil {
 		return err
 	}
 	return writeYAML(filepath.Join(root, "cnips.lock"), emptyLock())

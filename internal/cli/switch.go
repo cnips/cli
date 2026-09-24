@@ -35,10 +35,13 @@ func runSwitch(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	name := strings.TrimSpace(profileName)
-	if name == "" {
-		name = cfg.CurrentProfile
+	var profile auth.Profile
+	var ok bool
+	if name != "" {
+		profile, ok = cfg.Find(name)
+	} else if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		profile, ok = cfg.CurrentForDirectory(cwd)
 	}
-	profile, ok := cfg.Profiles[name]
 	if !ok {
 		return fmt.Errorf("no logged in profile found; run cnips login first")
 	}
@@ -73,7 +76,7 @@ func runSwitch(cmd *cobra.Command, _ []string) error {
 	if err := discardProjectRoot(root); err != nil {
 		return err
 	}
-	if !cfg.SetWorkspace(name, selected) {
+	if !cfg.SetWorkspaceForDirectory(auth.LoginKey(profile), root, selected) {
 		return fmt.Errorf("profile %q does not exist", name)
 	}
 	if err := auth.Save(cfg); err != nil {

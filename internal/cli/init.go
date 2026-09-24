@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cnips/cli/internal/project"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -29,7 +30,7 @@ Folder structure created:
   switches/               Local switch components
   decisions/              Local decision components
   environments/dev.yaml   Dev environment definition
-  .gitignore              Ignores .cnips/ runtime cache`,
+  CLI runtime data is stored per-project in the user config directory`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
@@ -55,6 +56,9 @@ Folder structure created:
 		if err := ensureInitProjectDirs(targetDir); err != nil {
 			return err
 		}
+		if err := project.EnsureDirs(targetDir); err != nil {
+			return err
+		}
 
 		// cnips.yaml
 		manifest := projectManifest(name)
@@ -75,7 +79,7 @@ Folder structure created:
 		}
 
 		// .gitignore
-		gitignore := ".cnips/\nnode_modules/\n*.pyc\n__pycache__/\n"
+		gitignore := "node_modules/\n*.pyc\n__pycache__/\n"
 		if err := writeFileIfMissing(filepath.Join(targetDir, ".gitignore"), []byte(gitignore)); err != nil {
 			return err
 		}
@@ -90,7 +94,7 @@ Folder structure created:
 		fmt.Printf("  %-35s  source, destination, transformation-family components\n", "sources/ destinations/ transformations/")
 		fmt.Printf("  %-35s  approval, switch, decision components\n", "approvals/ switches/ decisions/")
 		fmt.Printf("  %-35s  environment bindings\n", "environments/")
-		fmt.Printf("  %-35s  runtime cache (gitignored)\n", ".cnips/")
+		fmt.Printf("  %-35s  runtime state outside the repository\n", "user config directory")
 		fmt.Println()
 		fmt.Printf("Next steps:\n")
 		if targetDir != "." {

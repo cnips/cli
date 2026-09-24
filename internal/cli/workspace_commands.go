@@ -18,35 +18,39 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show local and cnips changes against the tracked base",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		root := project.MustFindRoot()
-		apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
-		if err != nil {
-			return err
-		}
-		client := platform.NewClient(apiURL, tenantKey, token)
-		manifest, hasLocalBase, err := readComparisonBase(root, client, workspace, true)
-		if err != nil {
-			return err
-		}
-		comparison, err := compareLocalBaseRemote(root, client, workspace, manifest)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("On cnips workspace %s\n", workspace)
-		if hasLocalBase {
-			fmt.Println("Base: local tracking manifest")
-		} else {
-			fmt.Println("Base: workspace manifest fallback")
-		}
-		printHeadStatus(comparison)
-		if len(comparison.All) == 0 {
-			fmt.Println("nothing to commit, working tree clean")
-			return nil
-		}
-		fmt.Printf("\nLocal changes: %d  Cnips changes: %d  Conflicts: %d\n", len(nonDerivedChanges(comparison.LocalOnly)), len(comparison.RemoteOnly), len(comparison.Conflicts))
-		printSyncSummary(comparison)
-		return nil
+		return runWithLoader("Checking status", true, func() error { return runStatus(cmd) })
 	},
+}
+
+func runStatus(cmd *cobra.Command) error {
+	root := project.MustFindRoot()
+	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
+	if err != nil {
+		return err
+	}
+	client := platform.NewClient(apiURL, tenantKey, token)
+	manifest, hasLocalBase, err := readComparisonBase(root, client, workspace, true)
+	if err != nil {
+		return err
+	}
+	comparison, err := compareLocalBaseRemote(root, client, workspace, manifest)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("On cnips workspace %s\n", workspace)
+	if hasLocalBase {
+		fmt.Println("Base: local tracking manifest")
+	} else {
+		fmt.Println("Base: workspace manifest fallback")
+	}
+	printHeadStatus(comparison)
+	if len(comparison.All) == 0 {
+		fmt.Println("nothing to commit, working tree clean")
+		return nil
+	}
+	fmt.Printf("\nLocal changes: %d  Cnips changes: %d  Conflicts: %d\n", len(nonDerivedChanges(comparison.LocalOnly)), len(comparison.RemoteOnly), len(comparison.Conflicts))
+	printSyncSummary(comparison)
+	return nil
 }
 
 func printHeadStatus(comparison *syncComparison) {
@@ -277,5 +281,5 @@ func loadStash(root, id string) (*cnipsStash, string, error) {
 }
 
 func stashDir(root string) string {
-	return filepath.Join(root, ".cnips", "stash")
+	return filepath.Join(project.StateDir(root), "stash")
 }

@@ -1,0 +1,231 @@
+[
+    {
+        "name": "Transformation",
+        "version": "v2",
+        "scriptType": "TRANSFORMATION",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/zinscky/log\"\n)\n\ntype MyEvent struct {\n\tSub       string `json:\"sub\"`\n\tCharCount int    `json:\"charCount\"`\n}\n\nfunc Execute(event string, config map[string]string, vars map[string]string, log *log.Logger) (string, error) {\n\tlog.Info(\"inside transformation\")\n\t// unmarshal incoming event to your struct\n\tmyEvent := &MyEvent{}\n\terr := json.Unmarshal([]byte(event), myEvent)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\t// apply your transformation logic\n\tmyEvent.CharCount = len(myEvent.Sub)\n\t// marshal your event back to json\n\ttransformedEvent, err := json.Marshal(myEvent)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\treturn string(transformedEvent), nil\n}\n",
+            "mod": "module transformation\n\ngo 1.22\n\nrequire (\n\tgithub.com/zinscky/log v1.1.0\n)\n\n"
+        }
+    },
+    {
+        "name": "Decision",
+        "version": "v2",
+        "scriptType": "DECISION",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/zinscky/log\"\n)\n\ntype MyEvent struct {\n\tSub       string `json:\"sub\"`\n\tCharCount int    `json:\"charCount\"`\n}\n\nfunc Execute(event string, config map[string]string, vars map[string]string, log *log.Logger) (bool, error) {\n\tlog.Info(\"inside decision\")\n\t// unmarshal incoming event to your struct\n\tmyEvent := &MyEvent{}\n\terr := json.Unmarshal([]byte(event), myEvent)\n\tif err != nil {\n\t\treturn false, err\n\t}\n\t// apply your decision logic\n\tif myEvent.Sub == \"\" {\n\t\treturn false, nil\n\t}\n\treturn true, nil\n}\n",
+            "mod": "module decision\n\ngo 1.22\n\nrequire (\n\tgithub.com/zinscky/log v1.1.0\n)\n\n"
+        }
+    },
+    {
+        "name": "Switch",
+        "version": "v2",
+        "scriptType": "SWITCH",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/zinscky/log\"\n)\n\ntype MyEvent struct {\n\tCategory string `json:\"category\"`\n}\n\nfunc Execute(event string, config map[string]string, vars map[string]string, log *log.Logger) (string, error) {\n\tlog.Info(\"inside switch\")\n\n\t// unmarshal incoming event to your struct\n\tmyEvent := &MyEvent{}\n\terr := json.Unmarshal([]byte(event), myEvent)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\n\tvar result string\n\n\tswitch myEvent.Category {\n\tcase \"user_added\":\n\t\tresult = \"user_added_label\"\n\n\tcase \"user_deleted\":\n\t\tresult = \"user_deleted_label\"\n\n\tdefault:\n\t\tresult = \"default_label\"\n\t}\n\n\t// MUST return string label (not JSON)\n\treturn result, nil\n}\n",
+            "mod": "module transformation\n\ngo 1.22\n\nrequire (\n\tgithub.com/zinscky/log v1.1.0\n)\n\n"
+        }
+    },
+    {
+        "name": "Approval",
+        "version": "v2",
+        "scriptType": "APPROVAL",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\n\t\"github.com/zinscky/log\"\n\n\t\"github.com/sendgrid/sendgrid-go\"\n\t\"github.com/sendgrid/sendgrid-go/helpers/mail\"\n)\n\ntype EmailConfig struct {\n\tTo      []string `json:\"to\"`\n\tSubject string   `json:\"subject\"`\n\tBody    string   `json:\"body\"`\n}\n\n// emailFrom and sendGridAPIKey should be configured in the config\n// To, Subject, Body should be configured in the emailConfig\nfunc Execute(event string, emailConfig *EmailConfig, config map[string]string, vars map[string]string, log *log.Logger) (string, error) {\n\tlog.Info(\"inside approval\")\n\n\temailFrom := config[\"email_from\"]\n\tapiKey := config[\"sendgrid_api_key\"]\n\n\tif emailFrom == \"\" || apiKey == \"\" {\n\t\treturn \"\", fmt.Errorf(\"missing configuration: 'email_from' and 'sendgrid_api_key' are required\")\n\t}\n\n\tif len(emailConfig.To) == 0 {\n\t\treturn \"\", fmt.Errorf(\"no recipient found in approval configuration\")\n\t}\n\n\tfrom := mail.NewEmail(\"Sender\", emailFrom)\n\tmessage := mail.NewV3Mail()\n\n\tp := mail.NewPersonalization()\n\tfor _, recipient := range emailConfig.To {\n\t\tp.AddTos(mail.NewEmail(\"\", recipient))\n\t}\n\tmessage.AddPersonalizations(p)\n\n\tmessage.SetFrom(from)\n\tmessage.Subject = emailConfig.Subject\n\n\tcontent := mail.NewContent(\"text/html\", emailConfig.Body)\n\tmessage.AddContent(content)\n\n\tclient := sendgrid.NewSendClient(apiKey)\n\tresponse, err := client.Send(message)\n\tif err != nil {\n\t\tlog.Error(\"error sending email: %v\", err)\n\t\treturn \"\", fmt.Errorf(\"sendgrid send failed: %w\", err)\n\t}\n\n\tif response.StatusCode >= 200 && response.StatusCode < 300 {\n\t\tlog.Info(\"Email sent successfully to: %v\", emailConfig.To)\n\t\treturn event, nil\n\t}\n\n\terrMsg := fmt.Sprintf(\"email failed with status %d: %s\", response.StatusCode, response.Body)\n\tlog.Error(errMsg)\n\treturn \"\", errors.New(errMsg)\n}\n",
+            "mod": "module approval\n\ngo 1.22\n\nrequire (\n\tgithub.com/pkg/errors v0.9.1\n\tgithub.com/sendgrid/sendgrid-go v3.16.1+incompatible\n\tgithub.com/zinscky/log v1.2.1\n)\n\nrequire (\n\tgithub.com/andybalholm/brotli v1.1.0 // indirect\n\tgithub.com/gofiber/fiber/v2 v2.52.6 // indirect\n\tgithub.com/google/uuid v1.6.0 // indirect\n\tgithub.com/klauspost/compress v1.17.9 // indirect\n\tgithub.com/mattn/go-colorable v0.1.13 // indirect\n\tgithub.com/mattn/go-isatty v0.0.20 // indirect\n\tgithub.com/mattn/go-runewidth v0.0.16 // indirect\n\tgithub.com/rivo/uniseg v0.2.0 // indirect\n\tgithub.com/sendgrid/rest v2.6.9+incompatible // indirect\n\tgithub.com/valyala/bytebufferpool v1.0.0 // indirect\n\tgithub.com/valyala/fasthttp v1.51.0 // indirect\n\tgithub.com/valyala/tcplisten v1.0.0 // indirect\n\tgolang.org/x/sys v0.28.0 // indirect\n)\n"
+        }
+    },
+    {
+        "name": "Destination",
+        "version": "v2",
+        "scriptType": "DESTINATION",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/zinscky/log\"\n)\n\ntype MyEvent struct {\n\tSub       string `json:\"sub\"`\n\tCharCount int    `json:\"charCount\"`\n}\n\nfunc Execute(event string, config map[string]string, vars map[string]string, log *log.Logger) error {\n\tlog.Info(\"inside destination\")\n\t// unmarshal incoming event to your struct\n\tmyEvent := &MyEvent{}\n\terr := json.Unmarshal([]byte(event), myEvent)\n\tif err != nil {\n\t\treturn err\n\t}\n\t// send to destination\n\treturn nil\n}\n",
+            "mod": "module destination\n\ngo 1.22\n\nrequire (\n\tgithub.com/zinscky/log v1.1.0\n)\n\n"
+        }
+    },
+    {
+        "name": "Extractor",
+        "version": "v2",
+        "scriptType": "EXTRACTOR",
+        "language": "golang",
+        "golang": {
+            "main": "package handler\n\nimport (\n\t\"encoding/json\"\n\n\t\"github.com/zinscky/log\"\n)\n\n// Define your struct to model the extracted data\ntype MyEvent struct {\n\tSub       string `json:\"sub\"`\n\tCharCount int    `json:\"charCount\"`\n}\n\nfunc Execute(config map[string]string, vars map[string]string, log *log.Logger) (string, error) {\n\tlog.Info(\"incoming config %v\", config)\n\t// your logic for data extraction\n\t//extracted data must always be returned as array\n\tdata := []MyEvent{\n\t\t{Sub: \"abc\"},\n\t\t{Sub: \"abcd\"},\n\t}\n\t// marshal you data in to json\n\tjsonData, err := json.Marshal(data)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\treturn string(jsonData), nil\n}\n",
+            "mod": "module extractor\n\ngo 1.22\n\nrequire (\n\tgithub.com/zinscky/log v1.1.0\n)\n\n"
+        }
+    },
+    {
+        "name": "Transformation",
+        "version": "v1",
+        "scriptType": "TRANSFORMATION",
+        "language": "javascript",
+        "script": "module.exports = function (event, ctx, config) {\n    //add your script here to transform or enrich the event\n\n    //remember to return the transformed event object for the pipeline to continue processing the event\n    return event;\n}"
+    },
+    {
+        "name": "Transformation",
+        "version": "v2",
+        "scriptType": "TRANSFORMATION",
+        "language": "javascript",
+        "script": "module.exports = function (event, ctx, config, vars) {\n    //add your script here to transform or enrich the event\n\n    //remember to return the transformed event object for the pipeline to continue processing the event\n    return event;\n}"
+    },
+    {
+        "name": "Transformation",
+        "version": "v3",
+        "scriptType": "TRANSFORMATION",
+        "language": "javascript",
+        "script": "/**\n * Transformation Function Contract:\n * \n * @param event - JSON object representing the event data\n * @param config - Transformation configuration (read-only)\n * @param vars - Global variables object (modify properties directly)\n * @param LOG - Logger instance for this execution\n * \n * IMPORTANT: \n * - DO NOT use require statement, always use import.\n * - Modify vars properties directly: vars.myProperty = newValue\n * - DO NOT reassign vars: vars = newObject (this won't work)\n * - Always return your transformaed event as javascript objects, otherwise system will stop processing with error message.\n * - You can also use typescript if you want to enforce types\n * - Just add types to the function parameters and import Logger from \"@cnips/simplelog\"\n * \n * Example:\n * ```typescript\n * import { Logger } from \"@cnips/simplelog\";\n * \n * interface MyEvent {\n *    type: string;\n *    timestamp: Date;\n * }\n * \n * interface TransformedEvent {\n *   processed: boolean;    \n *   originalEvent: MyEvent;\n *   timestamp: Date; \n * }\n * \n * interface Config {\n *   base_url: string;\n *   api_key: string;\n * }\n * \n * interface Veriables {\n *  access_token: string;\n * }\n * \n * export async function execute(event: MyEvent, config: Config, vars: Variables, LOG: Logger): Promise<TransformedEvent>\n * ```\n */\nexport async function execute(event, config, vars, LOG) {\n    try {\n        /**\n         * Example Logging Usage:\n         */\n        LOG.info(`Executing event: ${event}`);\n        LOG.debug(`Config: ${JSON.stringify(config)}`);\n        LOG.debug(`Vars: ${JSON.stringify(vars)}`);\n        /**\n         * Or you can use printf style logging:\n         */\n        LOG.info(`Event details: %s, Config: %j, Vars: %j`, event, config, vars);\n\n        // Transformation logic goes here\n        let transformedEvent = {\n            processed: true,\n            originalEvent: event,\n            timestamp: new Date(),\n        }\n        return transformedEvent;\n    } catch (error) {\n        // Log and throw meaningful errors so that its easier for debugging\n        LOG.error(`Error executing event ${event}:`, error);\n        throw error;\n    }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Switch",
+        "version": "v3",
+        "scriptType": "SWITCH",
+        "language": "javascript",
+        "script": "/**\n * Switch Function Contract:\n * \n * @param event - JSON object representing the event data\n * @param config - Transformation configuration (read-only)\n * @param vars - Global variables object (modify properties directly)\n * @param LOG - Logger instance for this execution\n * \n * IMPORTANT: \n * - DO NOT use require statement, always use import.\n * - Modify vars properties directly: vars.myProperty = newValue\n * - DO NOT reassign vars: vars = newObject (this won't work)\n * - Always return your transformed event as javascript objects, otherwise system will stop processing with error message.\n * - You can also use typescript if you want to enforce types\n * - Just add types to the function parameters and import Logger from \"@cnips/simplelog\"\n * \n * Example:\n * ```typescript\n * import { Logger } from \"@cnips/simplelog\";\n * \n * interface MyEvent {\n *    type: string;\n *    timestamp: Date;\n * }\n * \n * interface TransformedEvent {\n *   processed: boolean;    \n *   originalEvent: MyEvent;\n *   timestamp: Date; \n * }\n * \n * interface Config {\n *   base_url: string;\n *   api_key: string;\n * }\n * \n * interface Veriables {\n *  access_token: string;\n * }\n * \n * export async function execute(event: MyEvent, config: Config, vars: Variables, LOG: Logger): Promise<TransformedEvent>\n * ```\n */\nexport async function execute(event, config, vars, LOG) {\n    try {\n        /**\n         * Example Logging Usage:\n         */\n        LOG.info(`Executing event: ${event}`);\n        LOG.debug(`Config: ${JSON.stringify(config)}`);\n        LOG.debug(`Vars: ${JSON.stringify(vars)}`);\n        /**\n         * Or you can use printf style logging:\n         */\n        LOG.info(`Event details: %s, Config: %j, Vars: %j`, event, config, vars);\n\n        // Switch logic goes here\n        // Only return the defined switch labels\n        // otherwise pipeline will stop processing\n        switch (event.category) {\n            case \"user_added\":\n                return \"user_added_label\";\n            case \"user_deleted\":\n                return \"user_deleted_label\";\n            default:\n                return \"default_label\"\n        }\n    } catch (error) {\n        // Log and throw meaningful errors so that its easier for debugging\n        LOG.error(`Error executing event ${event}:`, error);\n        throw error;\n    }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Decision",
+        "version": "v1",
+        "scriptType": "DECISION",
+        "language": "javascript",
+        "script": "module.exports = function (event, ctx, config) {\n    //add your script here to check conditions for decision\n\n    //remember to return boolean true/false value, otherwise ppipelline will stop processing\n    return true;\n}"
+    },
+    {
+        "name": "Decision",
+        "version": "v2",
+        "scriptType": "DECISION",
+        "language": "javascript",
+        "script": "module.exports = function (event, ctx, config, vars) {\n    //add your script here to check conditions for decision\n\n    //remember to return boolean true/false value, otherwise ppipelline will stop processing\n    return true;\n}"
+    },
+    {
+        "name": "Decision",
+        "version": "v3",
+        "scriptType": "DECISION",
+        "language": "javascript",
+        "script": "/**\n * Decision Function Contract:\n * \n * @param event - JSON object representing the event data\n * @param config - Decision configuration (read-only)\n * @param vars - Global variables object (modify properties directly)\n * @param LOG - Logger instance for this execution\n * \n * IMPORTANT: \n * - DO NOT use require statement, always use import.\n * - Modify vars properties directly: vars.myProperty = newValue\n * - DO NOT reassign vars: vars = newObject (this won't work)\n * - Return boolean for decision response\n * - You can also use typescript if you want to enforce types\n * - Just add types to the function parameters and import Logger from \"@cnips/simplelog\"\n * \n * Example:\n * ```typescript\n * import { Logger } from \"@cnips/simplelog\";\n * \n * interface MyEvent {\n *    type: string;\n *    timestamp: Date;\n * }\n * \n * interface Config {\n *   base_url: string;\n *   api_key: string;\n * }\n * \n * interface Veriables {\n *  access_token: string;\n * }\n * \n * export async function execute(event: MyEvent, config: Config, vars: Variables, LOG: Logger): Promise<boolean>\n * ```\n */\nexport async function execute(event, config, vars, LOG) {\n    try {\n        /**\n         * Exxample Logging Usage:\n         */\n        LOG.info(`Executing event: ${event}`);\n        LOG.debug(`Config: ${JSON.stringify(config)}`);\n        LOG.debug(`Vars: ${JSON.stringify(vars)}`);\n        /**\n         * Or you can use printf style logging:\n         */\n        LOG.info(`Event details: %s, Config: %j, Vars: %j`, event, config, vars);\n\n        // Decision logic goes here\n        if (!event) {\n            return false\n        }\n        return true;\n    } catch (error) {\n        // Log and throw meaningful errors so that its easier for debugging\n        LOG.error(`Error executing event ${event}:`, error);\n        throw error;\n    }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Approval",
+        "version": "v3",
+        "scriptType": "APPROVAL",
+        "language": "javascript",
+        "script": "import sgMail from \"@sendgrid/mail\";\n/**\n * Approval Script Function Contract:\n *\n * @param event - JSON object representing the event data\n * @param emailConfig - Email configuration object containing to, subject, and body\n * @param config - Configuration object\n * @param vars - Global variables object\n * @param LOG - Logger instance for this execution\n */\nexport async function execute(event, emailConfig, config, vars, LOG) {\n    try {\n        sgMail.setApiKey(config.sendgrid_api_key);\n    \n        // Normalize \"To\" field to always be an array\n        const toList = Array.isArray(emailConfig.to)\n          ? emailConfig.to\n          : [emailConfig.to];\n    \n        const msg = {\n          to: toList,\n          from: config.email_from,\n          subject: emailConfig.subject,\n          html: emailConfig.body,\n        };\n    \n        const response = await sgMail.send(msg);\n        LOG.info(\n          `Email sent successfully to ${toList.join(\", \")} — ${JSON.stringify(\n            response\n          )}`\n        );\n    \n        return { status: \"success\", recipients: toList };\n      } catch (err) {\n        LOG.error(`Error sending email: ${err.message}`);\n        throw err;\n      }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Destination",
+        "version": "v1",
+        "scriptType": "DESTINATION",
+        "language": "javascript",
+        "script": "module.exports = {\n    setup: function(config) { /* optional */\n        //setup connection\n    },\n    execute: function(event, ctx, config) { /* required */\n        //send to destination.\n    },\n    teardown: function(config) { /* optional */\n        //teardown connection\n    }\n}"
+    },
+    {
+        "name": "Destination",
+        "version": "v2",
+        "scriptType": "DESTINATION",
+        "language": "javascript",
+        "script": "module.exports = {\n    setup: function(config, vars) { /* optional */\n        //setup connection\n    },\n    execute: function(event, ctx, config, vars) { /* required */\n        //send to destination.\n    },\n    teardown: function(config, vars) { /* optional */\n        //teardown connection\n    }\n}"
+    },
+    {
+        "name": "Destination",
+        "version": "v3",
+        "scriptType": "DESTINATION",
+        "language": "javascript",
+        "script": "/**\n * Destination Function Contract:\n * \n * @param event - JSON object representing the event data\n * @param config - Destination configuration (read-only)\n * @param vars - Global variables object (modify properties directly)\n * @param LOG - Logger instance for this execution\n * \n * IMPORTANT: \n * - DO NOT use require statement, always use import.\n * - Modify vars properties directly: vars.myProperty = newValue\n * - DO NOT reassign vars: vars = newObject (this won't work)\n * - No return values are required as this script is used to send data to destinations.\n * - You can also use typescript if you want to enforce types\n * - Just add types to the function parameters and import Logger from \"@cnips/simplelog\"\n * \n * Example:\n * ```typescript\n * import { Logger } from \"@cnips/simplelog\";\n * \n * interface MyEvent {\n *    type: string;\n *    timestamp: Date;\n * }\n * \n * interface Config {\n *   base_url: string;\n *   api_key: string;\n * }\n * \n * interface Veriables {\n *  access_token: string;\n * }\n * \n * export async function execute(event: MyEvent, config: Config, vars: Variables, LOG: Logger)\n * ```\n */\nexport async function execute(event, config, vars, LOG) {\n    try {\n        /**\n         * Example Logging Usage:\n         */\n        LOG.info(`Executing event: ${event}`);\n        LOG.debug(`Config: ${JSON.stringify(config)}`);\n        LOG.debug(`Vars: ${JSON.stringify(vars)}`);\n        /**\n         * Or you can use printf style logging:\n         */\n        LOG.info(`Event details: %s, Config: %j, Vars: %j`, event, config, vars);\n\n        // Destination logic goes here\n        // For example, you might send the event to an external API\n        // const response = await fetch(`${config.base_url}/events`, {\n        //     method: 'POST',\n        //     headers: {\n        //         'Content-Type': 'application/json',\n        //         'Authorization': `Bearer ${vars.access_token}`\n        //     },\n        //     body: JSON.stringify(event)\n        // });\n\n        // if (!response.ok) {\n        //     throw new Error(`Failed to send event: ${response.statusText}`);\n        // }\n\n        LOG.info(`Event sent successfully: ${event}`);\n    } catch (error) {\n        // Log and throw meaningful errors so that its easier for debugging\n        LOG.error(`Error executing event ${event}:`, error);\n        throw error;\n    }\n}",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Extractor",
+        "version": "v1",
+        "scriptType": "EXTRACTOR",
+        "language": "javascript",
+        "script": "module.exports = function(config) { /* required */\n    //add your script here to pull data from your data source.\n    let data = [{sub: \"sub1\"}, {sub: \"sub2\"}];\n    //always return your data as an array.\n    return data;\n}"
+    },
+    {
+        "name": "Extractor",
+        "version": "v2",
+        "scriptType": "EXTRACTOR",
+        "language": "javascript",
+        "script": "\n\n/**\n * Extractor Function Contract:\n * \n * @param config - Destination configuration (read-only)\n * @param vars - Global variables object (modify properties directly)\n * @param LOG - Logger instance for this execution\n * \n * IMPORTANT: \n * - DO NOT use require statement, always use import.\n * - Modify vars properties directly: vars.myProperty = newValue\n * - DO NOT reassign vars: vars = newObject (this won't work)\n * - Always return your extracted data as an array of objects.\n * - You can also use typescript if you want to enforce types\n * - Just add types to the function parameters and import Logger from \"@cnips/simplelog\"\n * \n * Example:\n * ```typescript\n * import { Logger } from \"@cnips/simplelog\";\n * \n * interface ExtractedData {\n *    sub: string;\n *    timestamp: Date;\n * }\n * \n * interface Config {\n *   base_url: string;\n *   api_key: string;\n * }\n * \n * interface Veriables {\n *  access_token: string;\n * }\n * \n * export async function execute(config: Config, vars: Variables, LOG: Logger): Promise<ExtractedData[]>\n * ```\n */\nexport async function execute(config, vars, LOG) {\n    try {\n        /**\n         * Example Logging Usage:\n         */\n        LOG.info(`Executing extractor`);\n        LOG.debug(`Config: ${JSON.stringify(config)}`);\n        LOG.debug(`Vars: ${JSON.stringify(vars)}`);\n        /**\n         * Or you can use printf style logging:\n         */\n        LOG.info(\"Config: %j, Vars: %j\", config, vars);\n\n        // Extractor logic goes here\n        // For example, lets say you are pulling data from some api and returning it\n        // let resp = await fetch(`${config.base_url}/data`, {\n        //     method: 'GET',\n        //     headers: { 'Authorization': `Bearer ${vars.access_token}` },\n        // });\n        // if (!resp.ok) {\n        //     throw new Error(`Failed to fetch data: ${resp.statusText}`);\n        // }\n        // let data = await resp.json();\n        // sample extracted data\n        let extractedData = [\n            { sub: \"abcd\", timestamp: new Date() },\n            { sub: \"abcdef\", timestamp: new Date() }\n        ];\n        return extractedData\n    } catch (error) {\n        // Log and throw meaningful errors so that its easier for debugging\n        LOG.error(`Error running extractor:`, error);\n        throw error;\n    }\n}\n",
+        "javascript": {
+            "packageJson": "{\n  \"name\": \"js-component\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"type\": \"module\",\n  \"devDependencies\": {\n    \"@types/node\": \"24.0.7\"\n  },\n  \"dependencies\": {\n    \"@cnips/simplelog\": \"1.0.0\"\n  }\n}\n"
+        }
+    },
+    {
+        "name": "Transformation",
+        "version": "v1",
+        "scriptType": "TRANSFORMATION",
+        "language": "python",
+        "python": {
+            "main": "from logstore import Logger\n\n\nasync def execute(event: dict, \n                  config: dict[str, str], \n                  vars: dict[str, str], \n                  log: Logger):\n    \"\"\"Implement your transformation here.\n\n    Parameters\n    -----------\n    event : dict\n        your event data as a dictionary.\n    config : dict[str, str]\n        the config values that you added during the creation of this transformation.\n    vars : dict[str, str]\n        any global variable assigned to the pipeline where this transformation is used.\n    log : Logger\n        a simple logger instance to capture any logs \n\n    \"\"\"\n    try:\n        log.info(\"incoming config = {}\", config)\n        log.info(\"incoming vars = {}\", vars)\n        log.info(\"incoming event = {}\", event)\n\n        # your logic for data transformation\n        event[\"charCount\"] = len(event.get(\"sub\"))\n        # Always return the transformaed event, otherwise pipeline will stop processing\n        return event\n    except Exception as e:\n        log.error(\"exception in transformnation - {}\", e)\n        raise e",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    },
+    {
+        "name": "Decision",
+        "version": "v1",
+        "scriptType": "DECISION",
+        "language": "python",
+        "python": {
+            "main": "from logstore import Logger\n\n\nasync def execute(event: dict, \n                  config: dict[str, str], \n                  vars: dict[str, str], \n                  log: Logger):\n    \"\"\"Implement your decision block here.\n\n    Parameters\n    -----------\n    event : dict\n        your event data as a dictionary.\n    config : dict[str, str]\n        the config values that you added during the creation of this decision block.\n    vars : dict[str, str]\n        any global variable assigned to the pipeline where this decision block is used.\n    log : Logger\n        a simple logger instance to capture any logs \n\n    \"\"\"\n    try:\n        log.info(\"incoming config = {}\", config)\n        log.info(\"incoming vars = {}\", vars)\n        log.info(\"incoming event = {}\", event)\n\n        # Decision blocks must return only boolean values\n        if event.get(\"sub\") is None:\n            return False\n        return True\n    except Exception as e:\n        log.error(\"Error in decision: {}\", str(e))\n        raise e",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    },
+    {
+        "name": "Switch",
+        "version": "v1",
+        "scriptType": "SWITCH",
+        "language": "python",
+        "python": {
+            "main": "from logstore import Logger\n\n\nasync def execute(event: dict, \n                  config: dict[str, str], \n                  vars: dict[str, str], \n                  log: Logger) -> str:\n    \"\"\"\n    Switch Component Function Contract\n\n    Parameters\n    -----------\n    event : dict\n        your event data as a dictionary.\n    config : dict[str, str]\n        the config values that you added during the creation of this transformation.\n    vars : dict[str, str]\n        any global variable assigned to the pipeline where this transformation is used.\n    log : Logger\n        a simple logger instance to capture any logs \n\n    Returns\n    -------\n    str\n        One of the switch labels you defined in the pipeline UI.\n\n    Notes\n    -----\n    - Always RETURN a string label.\n    - Do NOT return objects or data \u2014 switch only accepts labels.\n    - Returning undefined label will stop pipeline processing.\n    \"\"\"\n    try:\n        log.info(\"incoming config = {}\", config)\n        log.info(\"incoming vars = {}\", vars)\n        log.info(\"incoming event = {}\", event)\n\n       # printf-style logging\n        log.info(\"Event details: {}, Config: {}, Vars: {}\", event, config, vars)\n\n        # Example switch logic:\n        category = event.get(\"category\")\n\n        if category == \"user_added\":\n            return \"user_added_label\"\n\n        elif category == \"user_deleted\":\n            return \"user_deleted_label\"\n\n        else:\n            return \"default_label\"\n\n    except Exception as e:\n        log.error(\"Error executing switch - {}\", e)\n        raise e",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    },
+    {
+        "name": "Approval",
+        "version": "v1",
+        "scriptType": "APPROVAL",
+        "language": "python",
+        "python": {
+            "main": "from sendgrid import SendGridAPIClient\nfrom sendgrid.helpers.mail import Mail\nfrom logstore import Logger\n\n\nasync def execute(event: dict, email_config: dict, config: dict[str, str], vars: dict[str, str], log: Logger):\n    \"\"\"\n    Approval Script Function Contract (Python Version)\n\n    Parameters\n    ----------\n    event : dict\n        Event data as a dictionary.\n    email_config : dict\n        Email configuration containing 'to', 'subject', and 'body'.\n    config : dict[str, str]\n        Configuration object with 'sendgrid_api_key' and 'email_from'.\n    vars : dict[str, str]\n        Global variables object (can be modified directly).\n    log : Logger\n        Logger instance for this execution.\n    \"\"\"\n    try:\n        api_key = config.get(\"sendgrid_api_key\")\n        email_from = config.get(\"email_from\")\n\n        if not api_key or not email_from:\n            raise ValueError(\"sendgrid_api_key and email_from must be provided in config\")\n\n        to_list = email_config.get(\"to\")\n        if isinstance(to_list, str):\n            to_list = [to_list]\n\n        if not to_list:\n            raise ValueError(\"At least one recipient (To) must be provided in email_config\")\n\n        sg = SendGridAPIClient(api_key)\n\n        message = Mail(\n            from_email=email_from,\n            to_emails=to_list,\n            subject=email_config.get(\"subject\", \"\"),\n            html_content=email_config.get(\"body\", \"\"),\n        )\n\n        response = sg.send(message)\n\n        log.info(\"Email sent successfully to {} - Status: {}, Body: {}\".format(\n            \", \".join(to_list), response.status_code, response.body.decode() if response.body else \"No body\"\n        ))\n\n        return {\"status\": \"success\", \"recipients\": to_list}\n\n    except Exception as e:\n        log.error\n",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    },
+    {
+        "name": "Destination",
+        "version": "v1",
+        "scriptType": "DESTINATION",
+        "language": "python",
+        "python": {
+            "main": "from logstore import Logger\n\n\nasync def execute(event: dict, \n                  config: dict[str, str], \n                  vars: dict[str, str], \n                  log: Logger):\n    \"\"\"Implement your destination here.\n\n    Parameters\n    -----------\n    event : dict\n        your event data as a dictionary.\n    config : dict[str, str]\n        the config values that you added during the creation of this destination.\n    vars : dict[str, str]\n        any global variable assigned to the pipeline wheree this destination is used.\n    log : Logger\n        a simple logger instance to capture any logs \n\n    \"\"\"\n    try:\n        log.info(\"incoming config = {}\", config)\n        log.info(\"incoming vars = {}\", vars)\n\n        #send to destination\n        log.info(\"incoming event = {}\", event)\n    except Exception as e:\n        log.error(\"exception in destination - {}\", e)\n        raise e",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    },
+    {
+        "name": "Extractor",
+        "version": "v1",
+        "scriptType": "EXTRACTOR",
+        "language": "python",
+        "python": {
+            "main": "from logstore import Logger\n\n\nasync def execute(config: dict[str, str], logger: Logger):\n    \"\"\"Implement your extractor here.\n\n    Parameters\n    -----------\n    config : dict[str, str]\n        the config values that you added during the creation of this extractor.\n    logger : Logger\n        a simple logger instance to capture any logs \n\n    \"\"\"\n    try:\n        logger.info(\"incoming config = {}\", config)\n        # your logic for data extraction\n\n        data = [{\"sub\": \"abc\"}, {\"sub\": \"abcd\"}]\n        #extracted data must always be returned as array\n        return data\n    except Exception as e:\n        logger.error(\"exception in extraction - {}\", e)\n        raise e",
+            "requirements": "logstore==1.0.0\nxmltodict==0.14.2"
+        }
+    }
+]

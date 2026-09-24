@@ -13,6 +13,7 @@ import (
 )
 
 var fmtCheck bool
+var fmtType string
 
 var fmtCmd = &cobra.Command{
 	Use:   "fmt [path]",
@@ -35,6 +36,13 @@ current project.`,
 		files, err := collectFmtFiles(root, target)
 		if err != nil {
 			return err
+		}
+		selectedType, err := normalizeValidationType(fmtType)
+		if err != nil {
+			return err
+		}
+		if selectedType != "" {
+			files = filterFmtFilesByType(root, files, selectedType)
 		}
 		changed := 0
 		for _, path := range files {
@@ -61,7 +69,21 @@ current project.`,
 
 func init() {
 	fmtCmd.Flags().BoolVar(&fmtCheck, "check", false, "Report files that would change without writing them")
+	fmtCmd.Flags().StringVarP(&fmtType, "type", "t", "", "Optional component type to format")
 	rootCmd.AddCommand(fmtCmd)
+}
+
+func filterFmtFilesByType(root string, files []string, selectedType string) []string {
+	dirByType := map[string]string{"pipeline": "pipelines", "function": "functions", "component": "components", "source": "sources", "destination": "destinations", "transformation": "transformations", "approval": "approvals", "switch": "switches", "decision": "decisions", "globalvariable": "globalvariables", "configuration": "configurations"}
+	prefix := dirByType[selectedType] + "/"
+	var out []string
+	for _, path := range files {
+		rel := filepath.ToSlash(relPath(root, path))
+		if strings.HasPrefix(rel, prefix) {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func collectFmtFiles(root, target string) ([]string, error) {

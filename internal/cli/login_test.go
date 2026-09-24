@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cnips/cli/internal/auth"
@@ -65,6 +66,9 @@ func TestRunLoginStoresVerifiedWorkspaceProfile(t *testing.T) {
 	}
 	if profile.Name != "dev" || profile.WorkspaceID != "ws-1" || profile.TenantKey != "cnips-local" {
 		t.Fatalf("unexpected profile: %#v", profile)
+	}
+	if profile.WorkspaceName != "Workspace One" || profile.Directory == "" {
+		t.Fatalf("workspace name and directory were not persisted: %#v", profile)
 	}
 	if len(profile.Workspaces) != 2 {
 		t.Fatalf("workspaces = %#v", profile.Workspaces)
@@ -424,6 +428,91 @@ func TestRunLogoutClearsOnlyTokenFields(t *testing.T) {
 	}
 }
 
+func TestRunLogoutUsesDirectoryMappedLogin(t *testing.T) {
+	repo := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CNIPS_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	cfg := &auth.Config{}
+	cfg.UpsertForDirectory(auth.Profile{UserID: "mapped", APIURL: "http://mapped.example", Token: "mapped-token", WorkspaceID: "ws-1", WorkspaceName: "One"}, repo)
+	cfg.Upsert(auth.Profile{UserID: "other", APIURL: "http://other.example", Token: "other-token", WorkspaceID: "ws-2", WorkspaceName: "Two"})
+	if err := auth.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("env", "default", "")
+	if err := runLogout(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, _ := loaded.ForDirectory(repo)
+	other, _ := loaded.Find(auth.LoginKey(auth.Profile{UserID: "other", APIURL: "http://other.example", WorkspaceName: "Two"}))
+	if mapped.Token != "" || other.Token != "other-token" {
+		t.Fatalf("wrong login cleared: mapped=%#v other=%#v", mapped, other)
+	}
+}
+
+func TestRunLogoutOutsideMappedDirectoryPromptsForLogin(t *testing.T) {
+	outside := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(outside); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CNIPS_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	cfg := &auth.Config{}
+	cfg.UpsertForDirectory(auth.Profile{UserID: "one", APIURL: "http://one.example", Token: "one-token", WorkspaceID: "ws-1", WorkspaceName: "One"}, filepath.Join(t.TempDir(), "repo-one"))
+	cfg.UpsertForDirectory(auth.Profile{UserID: "two", APIURL: "http://two.example", Token: "two-token", WorkspaceID: "ws-2", WorkspaceName: "Two"}, filepath.Join(t.TempDir(), "repo-two"))
+	if err := auth.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdin := os.Stdin
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = write.WriteString("2\n")
+	_ = write.Close()
+	os.Stdin = read
+	defer func() {
+		os.Stdin = oldStdin
+		_ = read.Close()
+	}()
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("env", "default", "")
+	if err := runLogout(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := auth.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, _ := loaded.Find(auth.LoginKey(auth.Profile{UserID: "one", APIURL: "http://one.example", WorkspaceName: "One"}))
+	two, _ := loaded.Find(auth.LoginKey(auth.Profile{UserID: "two", APIURL: "http://two.example", WorkspaceName: "Two"}))
+	if one.Token != "one-token" || two.Token != "" {
+		t.Fatalf("selection cleared wrong login: one=%#v two=%#v", one, two)
+	}
+}
+
 func TestRunLoginAppendsMgmtSrvPathToRemoteAPIURL(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("CNIPS_CONFIG", configPath)
@@ -450,6 +539,35 @@ func TestRunLoginAppendsMgmtSrvPathToRemoteAPIURL(t *testing.T) {
 	}
 	if profile.BaseURL != "https://dev.cnips.eu" {
 		t.Fatalf("baseURL = %q, want https://dev.cnips.eu", profile.BaseURL)
+	}
+}
+
+func TestRunLoginPrefixesHTTPSWhenSchemeMissing(t *testing.T) {
+	t.Setenv("CNIPS_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	cmd := newLoginTestCommand()
+	_ = cmd.Flags().Set("api-url", "dev.cnips.eu")
+	_ = cmd.Flags().Set("token", "test-token")
+	_ = cmd.Flags().Set("workspace", "default")
+	_ = cmd.Flags().Set("skip-verify", "true")
+	if err := runLogin(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := auth.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, ok := cfg.Current()
+	if !ok || profile.APIURL != "https://dev.cnips.eu/mgmt-srv" {
+		t.Fatalf("profile = %#v, %v", profile, ok)
+	}
+}
+
+func TestRunLoginMissingLoginMethodReturnsInvalidCommand(t *testing.T) {
+	t.Setenv("CNIPS_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	cmd := newLoginTestCommand()
+	err := runLogin(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid command") {
+		t.Fatalf("error = %v, want invalid command", err)
 	}
 }
 

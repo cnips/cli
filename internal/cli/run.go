@@ -23,6 +23,7 @@ var (
 	runAutoApprove bool
 	runAutoReject  bool
 	runVerbose     bool
+	runType        string
 )
 
 var runCmd = &cobra.Command{
@@ -32,7 +33,7 @@ var runCmd = &cobra.Command{
 
 The pipeline is loaded from pipelines/<name>/pipeline.yaml.
 Components and functions are built automatically if their source has changed.
-A trace is written to .cnips/traces/run_<id>.json after the run.
+A trace is written to this project's user-level CNIPS data directory after the run.
 
 Native components supported locally:
   native/transformation@1   JSONata (via script file or inline expression)
@@ -80,8 +81,19 @@ Examples:
 		if runAutoApprove && runAutoReject {
 			return fmt.Errorf("--auto-approve and --auto-reject cannot be used together")
 		}
+		if strings.TrimSpace(runType) != "" {
+			output, err := runtime.RunComponent(runtime.ComponentRunOptions{
+				Root: root, Kind: runType, Name: pipelineName, Payload: payload,
+				Environment: runEnv, LogWriter: os.Stderr, Progress: os.Stdout,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Println(output)
+			return nil
+		}
 
-		execLog, err := executionlog.Start(filepath.Join(root, "pipelines", pipelineName))
+		execLog, err := executionlog.Start(filepath.Join(project.TraceDir(root), pipelineName))
 		if err != nil {
 			return fmt.Errorf("create execution log: %w", err)
 		}
@@ -134,6 +146,7 @@ func init() {
 	runCmd.Flags().BoolVar(&runAutoApprove, "auto-approve", false, "Automatically approve approval steps")
 	runCmd.Flags().BoolVar(&runAutoReject, "auto-reject", false, "Automatically reject approval steps")
 	runCmd.Flags().BoolVarP(&runVerbose, "verbose", "v", false, "Print each step as it executes")
+	runCmd.Flags().StringVarP(&runType, "type", "t", "", "Run one component by type instead of a pipeline (source, destination, transformation, approval, switch, decision, component, or function)")
 	rootCmd.AddCommand(runCmd)
 }
 
