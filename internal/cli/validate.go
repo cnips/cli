@@ -175,9 +175,6 @@ func validateFunctions(root string, report *validationReport) {
 			if fn.Artifact.Spec.Runtime == "" {
 				report.Errorf("functions/%s: spec.runtime is required", fn.Slug)
 			}
-			if fn.Artifact.Metadata.Name != fn.Slug {
-				report.Errorf("functions/%s: metadata.name %q must exactly match directory name %q", fn.Slug, fn.Artifact.Metadata.Name, fn.Slug)
-			}
 			if _, err := normalizeFunctionMethod(fn.Artifact.Spec.Method()); err != nil {
 				report.Errorf("functions/%s: spec.type must be GET, POST, PUT, or DELETE", fn.Slug)
 			}
@@ -206,9 +203,6 @@ func validateComponents(root, selectedType string, report *validationReport) {
 				}
 				if item.Artifact.Spec.Language == "" && componentRequiresLanguage(base.dir, item) {
 					report.Errorf("%s: spec.language is required", relPath(root, item.Dir))
-				}
-				if item.Artifact.Metadata.Name != item.Slug {
-					report.Errorf("%s/%s: metadata.name %q must exactly match directory name %q", base.dir, item.Slug, item.Artifact.Metadata.Name, item.Slug)
 				}
 			}
 			return nil
