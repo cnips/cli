@@ -87,6 +87,12 @@ func compareLocalBaseRemote(root string, client *platform.Client, workspace stri
 
 	var localFiles, remoteFiles map[string]string
 	var localManifest, remoteManifest map[string]manifestFile
+
+	// Server-side manifests are sync metadata written by CLI operations. They
+	// are not an authoritative view of the workspace because changes made by
+	// other clients (for example, the web app) do not necessarily refresh them.
+	// Always serialize the live API state before deciding that there is nothing
+	// to pull.
 	if err := runConcurrent(
 		func() error {
 			var err error

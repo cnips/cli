@@ -15,6 +15,9 @@ var transformationFamilyBases = []componentBase{
 }
 
 var localComponentBases = []componentBase{
+	// Keep reading legacy/generic components even though init no longer creates
+	// an empty components/ directory. Removing parser support would be a
+	// backwards-incompatible behavior change for existing projects.
 	{dir: "components", kind: "component"},
 	{dir: "transformations", kind: "transformation"},
 	{dir: "approvals", kind: "approval"},

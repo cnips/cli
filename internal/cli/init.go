@@ -21,7 +21,6 @@ Folder structure created:
   cnips.yaml              Project manifest
   cnips.lock              Resolved dependency graph (empty)
   pipelines/              Pipeline definitions
-  components/             Locally-authored components
   functions/              FaaS functions
   sources/                Local source components
   destinations/           Local destination components
@@ -89,7 +88,6 @@ Folder structure created:
 		fmt.Printf("  %-35s  project manifest\n", "cnips.yaml")
 		fmt.Printf("  %-35s  dependency lockfile\n", "cnips.lock")
 		fmt.Printf("  %-35s  pipeline definitions\n", "pipelines/")
-		fmt.Printf("  %-35s  local components\n", "components/")
 		fmt.Printf("  %-35s  FaaS functions\n", "functions/")
 		fmt.Printf("  %-35s  source, destination, transformation-family components\n", "sources/ destinations/ transformations/")
 		fmt.Printf("  %-35s  approval, switch, decision components\n", "approvals/ switches/ decisions/")

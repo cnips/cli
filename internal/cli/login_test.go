@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cnips/cli/internal/auth"
+	"github.com/cnips/cli/internal/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -181,6 +182,20 @@ func TestRunLoginWithoutExistingConfigPromptsForWorkspace(t *testing.T) {
 	}
 	if profile.WorkspaceID != "ws-2" {
 		t.Fatalf("workspace = %q, want ws-2", profile.WorkspaceID)
+	}
+}
+
+func TestConvertWorkspacesPlacesNamedWorkspaceBeforeDefault(t *testing.T) {
+	workspaces := convertWorkspaces([]platform.Workspace{
+		{WorkspaceID: "default", WorkspaceName: "default"},
+		{WorkspaceID: "ws-2", WorkspaceName: "Zulu"},
+		{WorkspaceID: "ws-1", WorkspaceName: "Alpha"},
+	})
+	if len(workspaces) != 3 {
+		t.Fatalf("len(workspaces) = %d, want 3", len(workspaces))
+	}
+	if workspaces[0].ID != "ws-1" || workspaces[1].ID != "ws-2" || workspaces[2].ID != "default" {
+		t.Fatalf("unexpected workspace order: %#v", workspaces)
 	}
 }
 

@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestInitDoesNotCreateComponentsDir(t *testing.T) {
+	root := t.TempDir()
+	cmd := initCmd
+	cmd.SetArgs([]string{})
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWd)
+		cmd.SetArgs(nil)
+	}()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init execute: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "components")); !os.IsNotExist(err) {
+		t.Fatalf("components/ directory should not be created by init, stat err=%v", err)
+	}
+}
+
 func TestInitDoesNotCreateSampleFunctionOrPipeline(t *testing.T) {
 	root := t.TempDir()
 	cmd := initCmd
