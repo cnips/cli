@@ -76,7 +76,6 @@ my-integrations/
 ├── cnips.yaml              # Project manifest
 ├── cnips.lock              # Dependency lockfile
 ├── pipelines/              # Pipeline definitions
-├── components/             # Local components
 ├── functions/              # FaaS functions
 ├── sources/                # Source components (extractors)
 ├── destinations/           # Destination components

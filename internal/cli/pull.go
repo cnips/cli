@@ -48,7 +48,7 @@ func runPull(cmd *cobra.Command, _ []string) error {
 	if dryRun {
 		return runPullInternal(cmd)
 	}
-	return runWithLoader("Pulling", false, func() error { return runPullInternal(cmd) })
+	return runWithLoader("Pulling", true, func() error { return runPullInternal(cmd) })
 }
 
 func runPullInternal(cmd *cobra.Command) error {
@@ -74,12 +74,18 @@ func runPullInternal(cmd *cobra.Command) error {
 
 	var previousManifest *pullManifest
 	if len(workspaceIDs) == 1 {
-		manifest, hasLocalBase, err := readComparisonBase(root, client, workspaceIDs[0], false)
+		manifest, _, err := readComparisonBase(root, client, workspaceIDs[0], false)
 		if err != nil {
 			return err
 		}
-		previousManifest = manifest
-		if hasLocalBase || !isFreshHydrationProject(root) {
+		if isFreshHydrationProject(root) {
+			// Runtime manifests live outside the repository and can survive when a
+			// project directory is deleted and initialized again at the same path.
+			// A freshly initialized tree is authoritative evidence that this is a
+			// hydration, so stale state must never suppress the download.
+			fmt.Printf("Fresh cnips project detected; hydrating workspace=%s without reporting local conflicts.\n", workspaceIDs[0])
+		} else {
+			previousManifest = manifest
 			comparison, err := compareLocalBaseRemote(root, client, workspaceIDs[0], manifest)
 			if err != nil {
 				return err
@@ -116,8 +122,6 @@ func runPullInternal(cmd *cobra.Command) error {
 				fmt.Printf("No cnips changes to pull for workspace=%s\n", workspaceIDs[0])
 				return nil
 			}
-		} else {
-			fmt.Printf("Fresh cnips project detected; hydrating workspace=%s without reporting local conflicts.\n", workspaceIDs[0])
 		}
 	}
 
@@ -139,6 +143,10 @@ func runPullInternal(cmd *cobra.Command) error {
 	}
 	printFetchedCounts(txList, srcList, dstList, fnList, gvList, configList, pipelineList)
 	fmt.Printf("  fetching apps...          %d\n", len(appList))
+	if len(txList)+len(srcList)+len(dstList)+len(fnList)+len(gvList)+len(configList)+len(pipelineList) == 0 {
+		fmt.Printf("\nWarning: workspace %q contains no workspace artifacts.\n", workspaceLabel)
+		fmt.Println("If your components are in another workspace, run 'cnips switch' or pass '--workspace <id>'.")
+	}
 
 	txSlugs := uniqueSlugs(txList, func(t platform.Transformation) string { return t.ID }, func(t platform.Transformation) string { return t.Name })
 	srcSlugs := uniqueSlugs(srcList, func(s platform.Source) string { return s.ID }, func(s platform.Source) string { return s.Name })

@@ -282,13 +282,20 @@ func convertWorkspaces(workspaces []platform.Workspace) []auth.Workspace {
 		out = append(out, auth.Workspace{ID: id, Name: name})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].ID == "default" {
-			return true
+		iDefault := out[i].ID == "default"
+		jDefault := out[j].ID == "default"
+		if iDefault != jDefault {
+			// The literal "default" workspace is commonly an empty compatibility
+			// workspace. Keep it selectable, but do not make it the Enter-key choice
+			// when the account also has named workspaces.
+			return !iDefault
 		}
-		if out[j].ID == "default" {
-			return false
+		left := strings.ToLower(firstNonEmpty(out[i].Name, out[i].ID))
+		right := strings.ToLower(firstNonEmpty(out[j].Name, out[j].ID))
+		if left == right {
+			return out[i].ID < out[j].ID
 		}
-		return out[i].ID < out[j].ID
+		return left < right
 	})
 	return out
 }

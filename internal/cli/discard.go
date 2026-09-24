@@ -45,7 +45,6 @@ func init() {
 
 var initProjectDirs = []string{
 	"pipelines",
-	"components",
 	"functions",
 	"sources",
 	"destinations",

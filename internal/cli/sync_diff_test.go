@@ -1,12 +1,91 @@
 package cli
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cnips/cli/internal/platform"
+	"github.com/cnips/cli/internal/serializer"
 )
+
+func TestCompareLocalBaseRemoteUsesLiveWorkspaceWhenServerManifestIsStale(t *testing.T) {
+	root := t.TempDir()
+	localFunction := platform.Function{
+		ID:          "fn-1",
+		Name:        "example",
+		Language:    "JAVASCRIPT",
+		Description: "old description",
+		SourceCode:  platform.SourceCode{Script: "module.exports = 'old'\n"},
+	}
+	if _, err := serializer.WriteFunctionAs(root, &localFunction, "example"); err != nil {
+		t.Fatalf("write local function: %v", err)
+	}
+	localFiles, err := collectComparableFiles(root)
+	if err != nil {
+		t.Fatalf("collect local files: %v", err)
+	}
+	baseFiles, err := manifestFilesForRoot(root, localFiles)
+	if err != nil {
+		t.Fatalf("build base manifest: %v", err)
+	}
+	base := &pullManifest{Files: baseFiles}
+
+	remoteFunction := localFunction
+	remoteFunction.Description = "new description"
+	remoteFunction.Script = "module.exports = 'new'\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/cnips-manifests/") {
+			// Manifests can lag behind edits made outside the CLI.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"status":  http.StatusOK,
+				"data": map[string]any{
+					"files": platformManifestFiles(baseFiles),
+				},
+			})
+			return
+		}
+
+		var list any = []any{}
+		if strings.HasSuffix(r.URL.Path, "/functions") {
+			list = []platform.Function{remoteFunction}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"status":  http.StatusOK,
+			"data": map[string]any{
+				"list":  list,
+				"count": 0,
+			},
+		})
+	}))
+	defer server.Close()
+
+	comparison, err := compareLocalBaseRemote(root, platform.NewClient(server.URL, "", ""), "ws", base)
+	if err != nil {
+		t.Fatalf("compareLocalBaseRemote: %v", err)
+	}
+	if len(comparison.RemoteOnly) == 0 {
+		t.Fatal("expected live workspace edits to be detected despite a stale server manifest")
+	}
+	foundHandler := false
+	for _, change := range comparison.RemoteOnly {
+		if change.Path == "functions/example/handler.js" {
+			foundHandler = true
+			break
+		}
+	}
+	if !foundHandler {
+		t.Fatalf("expected remote handler change, got %#v", comparison.RemoteOnly)
+	}
+}
 
 func TestSameManifestFileUsesFileDigestBeforeCodeHash(t *testing.T) {
 	left := manifestFile{Digest: "digest-a", CodeHash: "same-code"}
