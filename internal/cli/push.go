@@ -144,9 +144,9 @@ func runPush(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateBundleDirectoryNames(bundle); err != nil {
-		return err
-	}
+	// if err := validateBundleDirectoryNames(bundle); err != nil {
+	// 	return err
+	// }
 	indexLocalBundleAliases(state, bundle)
 	bundle = filterBundleByChanges(bundle, changes)
 	plan := buildPushPlan(bundle, state)
@@ -182,32 +182,32 @@ func runPush(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func validateBundleDirectoryNames(bundle *localBundle) error {
-	if bundle == nil {
-		return nil
-	}
-	components := append([]localComponent{}, bundle.Transformations...)
-	components = append(components, bundle.Sources...)
-	components = append(components, bundle.Destinations...)
-	components = append(components, bundle.Apps...)
-	for _, item := range components {
-		if name := strings.TrimSpace(item.Artifact.Metadata.Name); name != item.Slug {
-			return fmt.Errorf("%s/%s: metadata.name %q must exactly match directory name %q", item.BaseDir, item.Slug, name, item.Slug)
-		}
-	}
-	for _, item := range bundle.Functions {
-		if name := strings.TrimSpace(item.Artifact.Metadata.Name); name != item.Slug {
-			return fmt.Errorf("functions/%s: metadata.name %q must exactly match directory name %q", item.Slug, name, item.Slug)
-		}
-	}
-	for _, item := range bundle.Pipelines {
-		name := strings.TrimSpace(item.Metadata.Name)
-		if name == "" {
-			return fmt.Errorf("pipeline metadata.name is required")
-		}
-	}
-	return nil
-}
+// func validateBundleDirectoryNames(bundle *localBundle) error {
+// 	if bundle == nil {
+// 		return nil
+// 	}
+// 	components := append([]localComponent{}, bundle.Transformations...)
+// 	components = append(components, bundle.Sources...)
+// 	components = append(components, bundle.Destinations...)
+// 	components = append(components, bundle.Apps...)
+// 	for _, item := range components {
+// 		if strings.TrimSpace(item.Artifact.Metadata.Name) == "" {
+// 			return fmt.Errorf("%s/%s: metadata.name is required", item.BaseDir, item.Slug)
+// 		}
+// 	}
+// 	for _, item := range bundle.Functions {
+// 		if name := strings.TrimSpace(item.Artifact.Metadata.Name); name != item.Slug {
+// 			return fmt.Errorf("functions/%s: metadata.name %q must exactly match directory name %q", item.Slug, name, item.Slug)
+// 		}
+// 	}
+// 	for _, item := range bundle.Pipelines {
+// 		name := strings.TrimSpace(item.Metadata.Name)
+// 		if name == "" {
+// 			return fmt.Errorf("pipeline metadata.name is required")
+// 		}
+// 	}
+// 	return nil
+// }
 
 func filterSinglePushChanges(changes []fileChange, rawKind, rawName string) ([]fileChange, error) {
 	kind := strings.ToLower(strings.TrimSpace(rawKind))
