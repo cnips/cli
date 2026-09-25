@@ -568,36 +568,76 @@ func fetchApps(client *platform.Client) ([]platform.App, map[string][]platform.A
 		}
 		return nil, nil, err
 	}
-	versions := make(map[string][]platform.AppVersion, len(apps))
+
+	// ponytail: parallelize version lookups instead of sequential N+1.
+	// Collect all (appIndex, versionID, versionMeta) tuples, then fan out.
+	type versionLookup struct {
+		appIdx    int
+		versionID string
+		// Fields from the list entry used to fill defaults.
+		infoVersion       string
+		infoVersionNumber string
+		isFallback        bool // true when this is the latestVersionID fallback
+	}
+	var lookups []versionLookup
 	for i := range apps {
 		app := &apps[i]
 		if app.ID == "" {
 			app.ID = app.AltID
 		}
+		hasExplicit := false
 		for _, info := range app.Versions {
-			versionID := info.VersionID
-			if versionID == "" {
+			if info.VersionID == "" {
 				continue
 			}
-			version, err := client.GetAppVersion(versionID)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  warn: app %q version %q: %v\n", app.Name, versionID, err)
-				continue
-			}
-			if version.Ref == "" {
-				version.Ref = app.ID
-			}
-			if version.Name == "" {
-				version.Name = app.Name
-			}
-			if version.Version == "" {
-				version.Version = firstNonEmpty(info.Version, info.VersionNumber)
-			}
-			versions[app.ID] = append(versions[app.ID], *version)
+			hasExplicit = true
+			lookups = append(lookups, versionLookup{
+				appIdx:            i,
+				versionID:         info.VersionID,
+				infoVersion:       info.Version,
+				infoVersionNumber: info.VersionNumber,
+			})
 		}
-		if len(versions[app.ID]) == 0 && app.LatestVersionID != "" {
-			version, err := client.GetAppVersion(app.LatestVersionID)
-			if err == nil && version != nil {
+		if !hasExplicit && app.LatestVersionID != "" {
+			lookups = append(lookups, versionLookup{
+				appIdx:     i,
+				versionID:  app.LatestVersionID,
+				isFallback: true,
+			})
+		}
+	}
+
+	if len(lookups) == 0 {
+		return apps, map[string][]platform.AppVersion{}, nil
+	}
+
+	type versionResult struct {
+		appIdx  int
+		version platform.AppVersion
+	}
+
+	const workers = 16
+	jobs := make(chan versionLookup)
+	results := make(chan versionResult, len(lookups))
+	var wg sync.WaitGroup
+	workerCount := workers
+	if len(lookups) < workerCount {
+		workerCount = len(lookups)
+	}
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for lookup := range jobs {
+				app := &apps[lookup.appIdx]
+				version, err := client.GetAppVersion(lookup.versionID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  warn: app %q version %q: %v\n", app.Name, lookup.versionID, err)
+					continue
+				}
+				if version == nil {
+					continue
+				}
 				if version.Ref == "" {
 					version.Ref = app.ID
 				}
@@ -605,11 +645,27 @@ func fetchApps(client *platform.Client) ([]platform.App, map[string][]platform.A
 					version.Name = app.Name
 				}
 				if version.Version == "" {
-					version.Version = app.LatestVersion
+					if lookup.isFallback {
+						version.Version = app.LatestVersion
+					} else {
+						version.Version = firstNonEmpty(lookup.infoVersion, lookup.infoVersionNumber)
+					}
 				}
-				versions[app.ID] = append(versions[app.ID], *version)
+				results <- versionResult{appIdx: lookup.appIdx, version: *version}
 			}
-		}
+		}()
+	}
+	for _, l := range lookups {
+		jobs <- l
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	versions := make(map[string][]platform.AppVersion, len(apps))
+	for r := range results {
+		appID := apps[r.appIdx].ID
+		versions[appID] = append(versions[appID], r.version)
 	}
 	return apps, versions, nil
 }

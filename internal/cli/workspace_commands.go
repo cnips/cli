@@ -23,20 +23,30 @@ var statusCmd = &cobra.Command{
 }
 
 func runStatus(cmd *cobra.Command) error {
+	timing := debugTiming()
+	statusStart := time.Now()
+
 	root := project.MustFindRoot()
 	apiURL, workspace, tenantKey, token, err := resolveAuthenticatedPlatformFlags(cmd)
 	if err != nil {
 		return err
 	}
 	client := platform.NewClient(apiURL, tenantKey, token)
+
+	t := time.Now()
 	manifest, hasLocalBase, err := readComparisonBase(root, client, workspace, true)
 	if err != nil {
 		return err
 	}
+	timing("readComparisonBase (localBase=%v)", hasLocalBase).since(t)
+
+	t = time.Now()
 	comparison, err := compareLocalBaseRemote(root, client, workspace, manifest)
 	if err != nil {
 		return err
 	}
+	timing("compareLocalBaseRemote").since(t)
+	timing("status total").since(statusStart)
 	fmt.Printf("On cnips workspace %s\n", workspace)
 	if hasLocalBase {
 		fmt.Println("Base: local tracking manifest")
