@@ -79,6 +79,8 @@ type applyResolutionResponse struct {
 }
 
 func compareLocalBaseRemote(root string, client *platform.Client, workspace string, base *pullManifest) (*syncComparison, error) {
+	timing := debugTiming()
+
 	remoteRoot, err := os.MkdirTemp("", "cnips-remote-*")
 	if err != nil {
 		return nil, err
@@ -93,42 +95,63 @@ func compareLocalBaseRemote(root string, client *platform.Client, workspace stri
 	// other clients (for example, the web app) do not necessarily refresh them.
 	// Always serialize the live API state before deciding that there is nothing
 	// to pull.
+	// ponytail: skip version history API calls unless the local tree has
+	// multi-version component directories. When local uses multi-version
+	// layout (latest/, v1/, …) the remote snapshot must match, otherwise
+	// every version file shows as a false "delete-local" change.
+	skipVersions := !hasLocalVersionDirs(root)
+	timing("hasLocalVersionDirs → skipVersions=%v", skipVersions).since(time.Now())
+
+	concurrentStart := time.Now()
 	if err := runConcurrent(
 		func() error {
+			t := time.Now()
 			var err error
 			localFiles, err = collectComparableFiles(root)
 			if err != nil {
 				return err
 			}
 			localManifest, err = manifestFilesForRoot(root, localFiles)
+			timing("local collect+manifest (%d files)", len(localFiles)).since(t)
 			return err
 		},
 		func() error {
-			if err := writeRemoteSnapshot(client, workspace, remoteRoot); err != nil {
+			t := time.Now()
+			if err := writeRemoteSnapshot(client, workspace, remoteRoot, skipVersions); err != nil {
 				return err
 			}
+			timing("remote snapshot (API+serialize, skipVersions=%v)", skipVersions).since(t)
+
+			t = time.Now()
 			var err error
 			remoteFiles, err = collectComparableFiles(remoteRoot)
 			if err != nil {
 				return err
 			}
 			remoteManifest, err = manifestFilesForRoot(remoteRoot, remoteFiles)
+			timing("remote collect+manifest (%d files)", len(remoteFiles)).since(t)
 			return err
 		},
 	); err != nil {
 		return nil, err
 	}
+	timing("concurrent local+remote total").since(concurrentStart)
+
+	t := time.Now()
 	aliases, err := renameAliasesForCompare(root, remoteRoot)
 	if err != nil {
 		return nil, err
 	}
 	applyRenameAliasesToStringMap(remoteFiles, aliases)
 	applyRenameAliasesToManifest(remoteManifest, aliases)
+	timing("rename aliases").since(t)
+
 	conflictState, err := readConflictState(root, workspace)
 	if err != nil {
 		return nil, err
 	}
 
+	diffStart := time.Now()
 	baseManifest := map[string]manifestFile{}
 	baseHead, trackedLocalHead, trackedRemoteHead := "", "", ""
 	if base != nil && base.Files != nil {
@@ -229,6 +252,7 @@ func compareLocalBaseRemote(root string, client *platform.Client, workspace stri
 		}
 		out.All = append(out.All, change)
 	}
+	timing("three-way diff (%d paths, %d changes)", len(ordered), len(out.All)).since(diffStart)
 	return out, nil
 }
 
@@ -949,4 +973,32 @@ func (p *terminalProgress) Render() {
 	width := 30
 	filled := percent * width / 100
 	fmt.Printf("\r%s [%s%s] %3d%%", p.label, strings.Repeat("=", filled), strings.Repeat(" ", width-filled), percent)
+}
+
+// -----------------------------------------------------------------------
+// Debug timing (CNIPS_DEBUG_TIMING=1)
+// -----------------------------------------------------------------------
+
+type timingEntry struct {
+	label string
+	w     *os.File
+}
+
+func (e timingEntry) since(start time.Time) {
+	if e.w != nil {
+		fmt.Fprintf(e.w, "  [timing] %-45s %s\n", e.label, time.Since(start).Round(time.Millisecond))
+	}
+}
+
+// debugTiming returns a formatter that emits timing lines to stderr when
+// CNIPS_DEBUG_TIMING is set. When disabled, the returned function and its
+// .since() method are no-ops with zero overhead beyond the time.Now() calls
+// at each instrumentation point.
+func debugTiming() func(format string, args ...any) timingEntry {
+	if os.Getenv("CNIPS_DEBUG_TIMING") == "" {
+		return func(string, ...any) timingEntry { return timingEntry{} }
+	}
+	return func(format string, args ...any) timingEntry {
+		return timingEntry{label: fmt.Sprintf(format, args...), w: os.Stderr}
+	}
 }

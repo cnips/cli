@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cnips/cli/internal/platform"
 	"github.com/cnips/cli/internal/project"
@@ -89,16 +90,38 @@ type fileChange struct {
 	RemoteFingerprint string
 }
 
-func writeRemoteSnapshot(client *platform.Client, workspace, root string) error {
+func writeRemoteSnapshot(client *platform.Client, workspace, root string, skipVersions bool) error {
+	timing := debugTiming()
+
 	workspaceIDs := []string{workspace}
+	t := time.Now()
 	txList, srcList, dstList, fnList, gvList, configList, pipelineList, err := fetchWorkspaceLists(client, workspaceIDs)
 	if err != nil {
 		return err
 	}
-	appList, _, err := fetchApps(client)
-	if err != nil {
-		return err
+	timing("  fetchWorkspaceLists (7 types)").since(t)
+
+	// ponytail: apps are excluded from manifest comparison (ignoredManifestPath
+	// returns true for "apps/…"). When skipVersions is set we only need the
+	// lightweight app list for pipeline slug resolution — skip the expensive
+	// sequential GetAppVersion calls that fetchApps performs.
+	t = time.Now()
+	var appList []platform.App
+	if skipVersions {
+		appList, err = client.ListApps()
+		if err != nil {
+			if !isHTTPNotFound(err) {
+				return err
+			}
+			appList = nil
+		}
+	} else {
+		appList, _, err = fetchApps(client)
+		if err != nil {
+			return err
+		}
 	}
+	timing("  fetchApps (skipVersions=%v)", skipVersions).since(t)
 
 	txSlugs := uniqueSlugs(txList, func(t platform.Transformation) string { return t.ID }, func(t platform.Transformation) string { return t.Name })
 	srcSlugs := uniqueSlugs(srcList, func(s platform.Source) string { return s.ID }, func(s platform.Source) string { return s.Name })
@@ -113,20 +136,35 @@ func writeRemoteSnapshot(client *platform.Client, workspace, root string) error 
 	dstConfig := configMapByID(dstList, func(d platform.Destination) string { return d.ID }, func(d platform.Destination) []platform.ConfigItem { return d.Config })
 	appConfig := configMapByID(appList, func(a platform.App) string { return a.ID }, func(a platform.App) []platform.ConfigItem { return a.Config })
 	globalByID := globalVariablesByID(gvList)
-	const snapshotVersionWorkers = 32
-	txVersions := fetchComponentVersions(client, "", snapshotVersionWorkers, txList, func(t platform.Transformation) (string, string, string) {
-		return t.WorkspaceID, t.ID, platformTransformationType(t)
-	})
-	srcVersions := fetchComponentVersions(client, "", snapshotVersionWorkers, srcList, func(s platform.Source) (string, string, string) {
-		if !s.IsExtractor() {
-			return "", "", ""
-		}
-		return s.WorkspaceID, s.ID, "EXTRACTOR"
-	})
-	dstVersions := fetchComponentVersions(client, "", snapshotVersionWorkers, dstList, func(d platform.Destination) (string, string, string) {
-		return d.WorkspaceID, d.ID, "DESTINATION"
-	})
 
+	// ponytail: version history is only useful for pull --versions. The
+	// comparison path only needs the current ("latest") content of each
+	// component. Skipping the 3×N version API calls is the single biggest
+	// latency reduction for status/diff/push.
+	t = time.Now()
+	var txVersions, srcVersions, dstVersions map[string][]platform.Version
+	if skipVersions {
+		txVersions = map[string][]platform.Version{}
+		srcVersions = map[string][]platform.Version{}
+		dstVersions = map[string][]platform.Version{}
+	} else {
+		const snapshotVersionWorkers = 32
+		txVersions = fetchComponentVersions(client, "", snapshotVersionWorkers, txList, func(t platform.Transformation) (string, string, string) {
+			return t.WorkspaceID, t.ID, platformTransformationType(t)
+		})
+		srcVersions = fetchComponentVersions(client, "", snapshotVersionWorkers, srcList, func(s platform.Source) (string, string, string) {
+			if !s.IsExtractor() {
+				return "", "", ""
+			}
+			return s.WorkspaceID, s.ID, "EXTRACTOR"
+		})
+		dstVersions = fetchComponentVersions(client, "", snapshotVersionWorkers, dstList, func(d platform.Destination) (string, string, string) {
+			return d.WorkspaceID, d.ID, "DESTINATION"
+		})
+	}
+	timing("  fetchComponentVersions (skipVersions=%v)", skipVersions).since(t)
+
+	t = time.Now()
 	for i := range txList {
 		if _, err := serializer.WriteTransformationVersionsAs(root, &txList[i], txSlugs[txList[i].ID], txVersions[txList[i].ID]); err != nil {
 			return err
@@ -163,6 +201,7 @@ func writeRemoteSnapshot(client *platform.Client, workspace, root string) error 
 			return err
 		}
 	}
+	timing("  serialize to disk").since(t)
 	return nil
 }
 
@@ -202,6 +241,53 @@ func compareTrees(localRoot, remoteRoot string) ([]fileChange, error) {
 		}
 	}
 	return changes, nil
+}
+
+// hasLocalVersionDirs reports whether any component directory under root uses
+// a multi-version layout (contains subdirectories named "latest", "v1", etc.).
+// When true, the remote snapshot must also fetch version history so that its
+// file tree matches the local layout — otherwise the comparison produces false
+// "delete-local" entries for every version subdirectory file.
+func hasLocalVersionDirs(root string) bool {
+	// ponytail: only component types that go through writeComponentVersions
+	// can have version subdirectories. Functions and other types do not.
+	for _, base := range []string{"transformations", "approvals", "switches", "decisions", "sources", "destinations"} {
+		baseDir := filepath.Join(root, base)
+		slugs, err := os.ReadDir(baseDir)
+		if err != nil {
+			continue
+		}
+		for _, slug := range slugs {
+			if !slug.IsDir() {
+				continue
+			}
+			children, err := os.ReadDir(filepath.Join(baseDir, slug.Name()))
+			if err != nil {
+				continue
+			}
+			for _, child := range children {
+				if child.IsDir() && isComponentVersionDir(child.Name()) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isComponentVersionDir(name string) bool {
+	if name == "latest" {
+		return true
+	}
+	if len(name) < 2 || name[0] != 'v' {
+		return false
+	}
+	for _, c := range name[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func collectComparableFiles(root string) (map[string]string, error) {

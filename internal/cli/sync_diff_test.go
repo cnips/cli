@@ -544,3 +544,56 @@ func TestSameComponentSiblingFileUsesOwnDigest(t *testing.T) {
 		t.Fatal("expected remote handler change to be detected")
 	}
 }
+
+func TestIsComponentVersionDir(t *testing.T) {
+	cases := map[string]bool{
+		"latest":       true,
+		"v1":           true,
+		"v12":          true,
+		"v123":         true,
+		"v0":           true,
+		"component":    false,
+		"handler.js":   false,
+		"v":            false,
+		"v1a":          false,
+		"V1":           false,
+		"node_modules": false,
+		".git":         false,
+		"":             false,
+	}
+	for name, want := range cases {
+		if got := isComponentVersionDir(name); got != want {
+			t.Errorf("isComponentVersionDir(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestHasLocalVersionDirsDetectsMultiVersionLayout(t *testing.T) {
+	root := t.TempDir()
+
+	// No component directories at all → false.
+	if hasLocalVersionDirs(root) {
+		t.Fatal("expected false for empty root")
+	}
+
+	// Single-version component (no version subdirs) → false.
+	singleDir := filepath.Join(root, "transformations", "my-tx")
+	if err := os.MkdirAll(singleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(singleDir, "component.yaml"), []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if hasLocalVersionDirs(root) {
+		t.Fatal("expected false for single-version layout")
+	}
+
+	// Add a version subdirectory → true.
+	versionDir := filepath.Join(singleDir, "v1")
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !hasLocalVersionDirs(root) {
+		t.Fatal("expected true after adding v1/ subdirectory")
+	}
+}
